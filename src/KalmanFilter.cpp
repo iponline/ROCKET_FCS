@@ -1,4 +1,8 @@
 #include "KalmanFilter.h"
+#ifndef ARDUINO
+    #include <Arduino.h>
+#endif
+
 
 KalmanFilter::KalmanFilter(double angle, double bias, double measure)
 {
