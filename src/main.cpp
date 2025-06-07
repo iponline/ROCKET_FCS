@@ -1,38 +1,58 @@
-#include <Arduino.h>
-#include "TeensyThreads.h"
-#include <avr/io.h>
+/**
+ * @file    main.cpp
+ * @brief   FreeRTOS example for Teensy boards
+ * @author  Timo Sandmann
+ * @date    17.05.2020
+ */
 
+ #include "arduino_freertos.h"
+ #include "avr/pgmspace.h"
+ 
+ 
+ static void task1(void*) {
+     pinMode(arduino::LED_BUILTIN, arduino::OUTPUT);
+     while (true) {
+         digitalWriteFast(arduino::LED_BUILTIN, arduino::LOW);
+         vTaskDelay(pdMS_TO_TICKS(300));
+ 
+         digitalWriteFast(arduino::LED_BUILTIN, arduino::HIGH);
+         vTaskDelay(pdMS_TO_TICKS(300));
+     }
+ }
+ 
+ static void task2(void*) {
+     Serial.begin(9600);
+     while (true) {
+         Serial.println("TICK");
+         vTaskDelay(pdMS_TO_TICKS(1'000));
+ 
+         Serial.println("TOCK");
+         vTaskDelay(pdMS_TO_TICKS(1'000));
+     }
+ }
+ 
+ FLASHMEM __attribute__((noinline)) void setup() {
 
-const int LED = 13;
-
-volatile int blinkcode = 0;
-
-void blinkthread() {
-  while(1) {
-    if (blinkcode) {
-      for (int i=0; i<blinkcode; i++) {
-        digitalWrite(LED, HIGH);
-        threads.delay(500);
-        digitalWrite(LED, LOW);
-        threads.delay(500);
-      }
-      blinkcode = 0;
-    }
-    threads.yield();
-  }
-}
-
-void setup() {
-  //delay(1000);
-  pinMode(LED, OUTPUT);
-  threads.addThread(blinkthread);
-}
-
-int count = 0;
-
-void loop() {
-  count++;
-  blinkcode = count;
-  //delay(5000);
-  Serial.println(count);
-}
+     delay(2000);
+     Serial.begin(0);
+     //delay(2'000);
+ 
+     if (CrashReport) {
+         Serial.print(CrashReport);
+         Serial.println();
+         Serial.flush();
+     }
+ 
+     Serial.println(PSTR("\r\nBooting FreeRTOS kernel " tskKERNEL_VERSION_NUMBER ". Built by gcc " __VERSION__ " (newlib " _NEWLIB_VERSION ") on " __DATE__ ". ***\r\n"));
+ 
+     xTaskCreate(task1, "task1", 128, nullptr, 2, nullptr);
+     xTaskCreate(task2, "task2", 128, nullptr, 2, nullptr);
+ 
+     Serial.println("setup(): starting scheduler...");
+     Serial.flush();
+ 
+     vTaskStartScheduler();
+ }
+ 
+ void loop() {}
+ 
