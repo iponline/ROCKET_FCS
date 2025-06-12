@@ -9,6 +9,7 @@
 #define MPU6050_INT_STATUS  0x3A     ///< Interrupt status register
 #define MPU6050_ACCEL_OUT   0x3B     ///< base address for sensor data reads
 #define MPU6050_PWR_MGMT_1  0x6B     ///< Primary power/sleep control register
+#define MPU6050_INT_PIN     22
 
 struct RawIMUData {
     int16_t ax, ay, az;
@@ -27,20 +28,29 @@ struct IMU_Data {
     float gx, gy, gz;
 };
 
+struct IMUCalibration {
+    float ax_offset, ay_offset, az_offset;
+    float gx_offset, gy_offset, gz_offset;
+};
+
 class IMU {
 public:
     IMU(uint8_t address = MPU6050_DEVICE_ID, TwoWire& w = Wire);
     bool begin();
     bool readRaw(RawIMUData& data);
     bool IMUData(IMU_Data& data);
-    bool KalmanData(FilteredData& fdata);
+    bool KalmanData(FilteredData& fdata, float dt);
     void wakeup();
-    void setGyroOffsets(int16_t gx_off, int16_t gy_off, int16_t gz_off);
+    //void setGyroOffsets(int16_t gx_off, int16_t gy_off, int16_t gz_off);
+    bool enableDataReadyInterrupt();
+    bool calibrate(IMUCalibration& cal, int samples = 500, int delay_ms = 2);
+    void setCalibration(const IMUCalibration& cal);
 
 private:
     uint8_t addr;
     TwoWire& wire;
-    int16_t gx_offset = 0, gy_offset = 0, gz_offset = 0;
+    IMUCalibration calib = {0,0,0,0,0,0};
+    //int16_t gx_offset = 0, gy_offset = 0, gz_offset = 0;
 
     bool readRegisters(uint8_t reg, uint8_t* buf, uint8_t len);
 };
