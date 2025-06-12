@@ -1,0 +1,122 @@
+/**
+ * @file    main.cpp
+ * @brief   Rocket Flight control for Teensy boards
+ * @author  Sasit Chuasomboon
+ * @date    11.06.2025
+ */
+
+ #include "arduino_freertos.h"
+ #include "semphr.h"
+ #include "avr/pgmspace.h"
+ #include "IMU.h"
+ #include "types.h"
+ #include "core_pins.h"
+ 
+
+IMU imu;
+FilteredData fdata;
+IMUCalibration cal;
+
+// Build binary semaphore สำหรับสื่อสารระหว่าง ISR ↔ Task
+SemaphoreHandle_t imuSemaphore;
+
+void mpu6050_ISR() {
+
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    xSemaphoreGiveFromISR(imuSemaphore, &xHigherPriorityTaskWoken);
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+
+}
+
+static void IMU_read(void*) {  // ตั้งค่าเป็น static เพื่อป้องกันการชนชื่อฟังก์ชั่นกับไฟล์อื่น, void* เป็นข้อบังคับมาตรฐานของ FreeRTOS
+
+    imu.begin();  // เริ่มต้น
+    imu.calibrate(cal, 5000, 2);
+
+    if(!(imu.enableDataReadyInterrupt())){
+        Serial.println("Cannot initialize Interrupt...");
+    }
+
+    // Set Pin Mode and Interrupt
+    pinMode(MPU6050_INT_PIN, arduino::INPUT);
+    attachInterrupt(digitalPinToInterrupt(MPU6050_INT_PIN), mpu6050_ISR, arduino::RISING);
+
+    static uint32_t lastTick = 0;
+
+    while (true){
+
+        if (xSemaphoreTake(imuSemaphore, portMAX_DELAY) == pdTRUE) {
+
+            //double rad2deg = 57.29578;
+
+            uint32_t now = millis();
+            double dt = (now - lastTick) / 1000.0;
+            if (dt <= 0.0) dt = 0.001;
+            lastTick = now;
+
+            //double accXangle = atan2(imu_data.ay, imu_data.az) * rad2deg;
+            //double accYangle = atan2(-imu_data.ax, sqrt(imu_data.ay*imu_data.ay + imu_data.az*imu_data.az)) * rad2deg;
+
+            //fdata.kalAngleX = imu.Kalman_filter(fdata.kalAngleX, imu_data.gx, accXangle, dt);
+            //fdata.kalAngleY = imu.Kalman_filter(fdata.kalAngleY, imu_data.gy, accYangle, dt);
+
+            imu.KalmanData(fdata, dt);
+            //imu.KalmanData(fdata);
+
+            // Serial.print("Kalman X: "); Serial.print(fdata.kalAngleX, 2);
+            // Serial.print("  Kalman Y: "); Serial.println(fdata.kalAngleY, 2);
+
+            Serial.print(millis());
+            Serial.print(",");
+            Serial.print(fdata.kalAngleX, 3);
+            Serial.print(",");
+            Serial.println(fdata.kalAngleY, 3);
+
+            
+        }
+
+        //vTaskDelay(pdMS_TO_TICKS(20)); // 50 Hz
+
+    }
+
+     
+ }
+ 
+//  static void task2(void*) {
+//      Serial.begin(9600);
+//      while (true) {
+//          Serial.println("TICK");
+//          vTaskDelay(pdMS_TO_TICKS(1'000));
+ 
+//          Serial.println("TOCK");
+//          vTaskDelay(pdMS_TO_TICKS(1'000));
+//      }
+//  }
+ 
+ FLASHMEM __attribute__((noinline)) void setup() {
+
+     delay(2000);
+     Serial.begin(115200);
+     //delay(2'000);
+ 
+     if (CrashReport) {
+         Serial.print(CrashReport);
+         Serial.println();
+         Serial.flush();
+     }
+ 
+     Serial.println(PSTR("\r\nBooting FreeRTOS kernel " tskKERNEL_VERSION_NUMBER ". Built by gcc " __VERSION__ " (newlib " _NEWLIB_VERSION ") on " __DATE__ ". ***\r\n"));
+ 
+     imuSemaphore = xSemaphoreCreateBinary();
+
+     xTaskCreate(IMU_read, "task1", 256, nullptr, 2, nullptr);
+     //xTaskCreate(task2, "task2", 128, nullptr, 2, nullptr);
+ 
+     Serial.println("setup(): starting scheduler...");
+     Serial.flush();
+ 
+     vTaskStartScheduler();
+ }
+ 
+ void loop() {}
+ 

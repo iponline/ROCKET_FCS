@@ -18,8 +18,8 @@ struct RawIMUData {
 };
 
 struct FilteredData{
-    float kalAngleX;
-    float kalAngleY;
+    double kalAngleX;
+    double kalAngleY;
 };
 
 struct IMU_Data {
@@ -38,21 +38,29 @@ public:
     IMU(uint8_t address = MPU6050_DEVICE_ID, TwoWire& w = Wire);
     bool begin();
     bool readRaw(RawIMUData& data);
-    bool IMUData(IMU_Data& data);
-    bool KalmanData(FilteredData& fdata, float dt);
+    bool IMUData(IMU_Data& data, const RawIMUData& raw);
+    bool KalmanData(FilteredData& fdata, double dt);
     void wakeup();
-    //void setGyroOffsets(int16_t gx_off, int16_t gy_off, int16_t gz_off);
     bool enableDataReadyInterrupt();
     bool calibrate(IMUCalibration& cal, int samples = 500, int delay_ms = 2);
     void setCalibration(const IMUCalibration& cal);
+    //double Kalman_filter(double angle, double gyroRate, double accelAngle, double dt);
+    double Kalman_filter(double& angle, double& bias, double& rate, double P[2][2],
+        double newRate, double newAngle, double dt);
 
 private:
+
     uint8_t addr;
     TwoWire& wire;
     IMUCalibration calib = {0,0,0,0,0,0};
-    //int16_t gx_offset = 0, gy_offset = 0, gz_offset = 0;
-
+  
     bool readRegisters(uint8_t reg, uint8_t* buf, uint8_t len);
+
+    // Kalman filter state (ต้องใช้ member variable ไม่ใช่ local variable)
+    double angleX = 0, biasX = 0, rateX = 0;
+    double PX[2][2] = {{0, 0}, {0, 0}};
+    double angleY = 0, biasY = 0, rateY = 0;
+    double PY[2][2] = {{0, 0}, {0, 0}};
 };
 
 #endif
