@@ -12,6 +12,12 @@ typedef struct {
     int16_t  accADC[3];
 } imu_t;
 
+
+struct Attitude {
+    float pitch;
+    float roll;
+};
+
 #endif
 
 

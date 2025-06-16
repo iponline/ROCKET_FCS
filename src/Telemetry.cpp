@@ -3,7 +3,7 @@
 #define TELEMETRY_SERIAL Serial1
 #define TELEMETRY_BAUD   57600
 
-void init() {
+void Telemetry::init() {
 
   TELEMETRY_SERIAL.begin(TELEMETRY_BAUD);
   delay(2000);
@@ -17,7 +17,7 @@ void init() {
 
 }
 
-void enterCommandMode() {
+void Telemetry::enterCommandMode() {
 
   delay(1000);
   TELEMETRY_SERIAL.print("+++");
@@ -31,7 +31,7 @@ void enterCommandMode() {
   }
 }
 
-void sendATCommand(const char* cmd) {
+void Telemetry::sendATCommand(const char* cmd) {
   Serial.print("Sending AT command: ");
   Serial.println(cmd);
 
@@ -47,21 +47,21 @@ void sendATCommand(const char* cmd) {
   }
 }
 
-void setAirDataRate(uint8_t rate) {
+void Telemetry::setAirDataRate(uint8_t rate) {
   char cmd[16];
   sprintf(cmd, "ATS3=%d", rate);
   sendATCommand(cmd);
 }
 
-void sendMessage(const char* msg) {
+void Telemetry::sendMessage(const char* msg) {
   TELEMETRY_SERIAL.println(msg);  // Send string with newline
 }
 
-void sendBinary(const uint8_t* data, size_t len) {
+void Telemetry::sendBinary(const uint8_t* data, size_t len) {
   TELEMETRY_SERIAL.write(data, len); // Send raw binary buffer
 }
 
-bool receiveMessage(char* buffer, size_t maxLen) {
+bool Telemetry::receiveMessage(char* buffer, size_t maxLen) {
   size_t idx = 0;
   unsigned long timeout = millis() + 100;
 
@@ -79,7 +79,7 @@ bool receiveMessage(char* buffer, size_t maxLen) {
   return (idx > 0);
 }
 
-size_t receiveBinary(uint8_t* buffer, size_t maxLen) {
+size_t Telemetry::receiveBinary(uint8_t* buffer, size_t maxLen) {
   size_t count = 0;
   unsigned long timeout = millis() + 10;
 
@@ -92,7 +92,7 @@ size_t receiveBinary(uint8_t* buffer, size_t maxLen) {
   return count;
 }
 
-void telemetry_setBaudRate(uint32_t baud) {
+void Telemetry::setBaudRate(uint32_t baud) {
 
 
     uint8_t baudCode = 0;
@@ -120,7 +120,7 @@ void telemetry_setBaudRate(uint32_t baud) {
 
   }
 
-  void creatPacket(uint8_t type, const uint8_t* payload, uint8_t len, uint8_t* outBuffer) {
+  void Telemetry::buildPacket(uint8_t type, const uint8_t* payload, uint8_t len, uint8_t* outBuffer) {
 
     const uint8_t START_BYTE = 0xAA;
   
@@ -143,7 +143,7 @@ void telemetry_setBaudRate(uint32_t baud) {
 
   }
 
-  bool receivePacket(uint8_t* type, uint8_t* payload, uint8_t* length) {
+  bool Telemetry::receivePacket(uint8_t* type, uint8_t* payload, uint8_t* length) {
     
     const uint8_t START_BYTE = 0xAA;
     static enum { WAIT_START, WAIT_TYPE, WAIT_LEN, WAIT_PAYLOAD, WAIT_CHECKSUM } state = WAIT_START;
