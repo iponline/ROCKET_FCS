@@ -141,6 +141,15 @@ void Telemetry::setBaudRate(uint32_t baud) {
   
     outBuffer[3 + len] = checksum; // Append checksum
 
+    // === Debug Print ===
+    // Serial.print("Telemetry Packet: ");
+    // for (uint8_t i = 0; i < 3 + len + 1; i++) {  // 3 header + payload + checksum
+    //      if (outBuffer[i] < 0x10) Serial.print("0"); // pad leading zero
+    //      Serial.print(outBuffer[i], HEX);
+    //      Serial.print(" ");
+    // }
+    // Serial.println();
+
   }
 
   bool Telemetry::receivePacket(uint8_t* type, uint8_t* payload, uint8_t* length) {

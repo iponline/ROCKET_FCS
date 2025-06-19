@@ -11,6 +11,7 @@
 #define MPU6050_PWR_MGMT_1  0x6B     ///< Primary power/sleep control register
 #define MPU6050_INT_PIN     22
 
+
 struct RawIMUData {
     int16_t ax, ay, az;
     int16_t temp;
@@ -39,13 +40,13 @@ public:
     bool begin();
     bool readRaw(RawIMUData& data);
     bool IMUData(IMU_Data& data, const RawIMUData& raw);
-    bool KalmanData(FilteredData& fdata, double dt);
+    bool EKFData(FilteredData& fdata, double dt);
     void wakeup();
     bool enableDataReadyInterrupt();
     bool calibrate(IMUCalibration& cal, int samples = 500, int delay_ms = 2);
     void setCalibration(const IMUCalibration& cal);
     //double Kalman_filter(double angle, double gyroRate, double accelAngle, double dt);
-    double Kalman_filter(double& angle, double& bias, double& rate, double P[2][2],
+    double EKF_filter(double& angle, double& bias, double& rate, double P[2][2],
         double newRate, double newAngle, double dt);
 
 private:

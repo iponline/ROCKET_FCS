@@ -8,6 +8,20 @@ bool IMU::begin() {
     Wire.begin();
     delay(100);
     wakeup();
+
+    // Set sample rate to 1000Hz
+    Wire.beginTransmission(addr);
+    Wire.write(0x19); // SMPLRT_DIV
+    Wire.write(0);    // 1000 Hz
+    Wire.endTransmission();
+
+    // Set DLPF to allow 1000Hz output rate (e.g. config 3 = 42Hz bandwidth)
+    Wire.beginTransmission(addr);
+    Wire.write(0x1A); // CONFIG
+    Wire.write(0x03); // DLPF_CFG = 3
+    Wire.endTransmission();
+
+
     return true;
 }
 
@@ -62,7 +76,7 @@ bool IMU::readRegisters(uint8_t reg, uint8_t* buf, uint8_t len) {
     return true;
 }
 
-bool IMU::KalmanData(FilteredData& fdata, double dt){
+bool IMU::EKFData(FilteredData& fdata, double dt){
     
     RawIMUData raw;
     IMU_Data data;
@@ -74,39 +88,67 @@ bool IMU::KalmanData(FilteredData& fdata, double dt){
     double accYangle = atan2(-data.ax, sqrt(data.ay * data.ay + data.az * data.az)) * rad2deg;
 
     // ใช้ Kalman_filter สำหรับแต่ละแกน
-    fdata.kalAngleX = Kalman_filter(angleX, biasX, rateX, PX, data.gx, accXangle, dt);
-    fdata.kalAngleY = Kalman_filter(angleY, biasY, rateY, PY, data.gy, accYangle, dt);
+    fdata.kalAngleX = EKF_filter(angleX, biasX, rateX, PX, data.gx, accXangle, dt);
+    fdata.kalAngleY = EKF_filter(angleY, biasY, rateY, PY, data.gy, accYangle, dt);
 
     return true;
 
 }
 
-double IMU::Kalman_filter(double& angle, double& bias, double& rate, double P[2][2],
+double IMU::EKF_filter(double& angle, double& bias, double& rate, double P[2][2],
     double newRate, double newAngle, double dt) {
 
-    // กำหนดค่า Gain ตามต้องการ
-    double Q_angle = 0.001, Q_bias = 0.003, R_measure = 0.03;
+    // Process and measurement noise
+    const double Q_angle = 0.001, Q_bias = 0.003, R_measure = 0.03;
 
-    // Predict
+    // State prediction
     rate = newRate - bias;
     angle += dt * rate;
 
-    P[0][0] += dt * (dt * P[1][1] - P[0][1] - P[1][0] + Q_angle);
-    P[0][1] -= dt * P[1][1];
-    P[1][0] -= dt * P[1][1];
-    P[1][1] += Q_bias * dt;
+    // Jacobian of the state transition (F)
+    // F = [[1, -dt],
+    //      [0,  1]]
+    double F[2][2] = {
+        {1.0, -dt},
+        {0.0, 1.0}
+    };
 
-    // Update
+    // Process covariance prediction: P = F * P * F^T + Q
+    double P_pred[2][2];
+    P_pred[0][0] = F[0][0]*P[0][0] + F[0][1]*P[1][0];
+    P_pred[0][1] = F[0][0]*P[0][1] + F[0][1]*P[1][1];
+    P_pred[1][0] = F[1][0]*P[0][0] + F[1][1]*P[1][0];
+    P_pred[1][1] = F[1][0]*P[0][1] + F[1][1]*P[1][1];
+
+    double Ft[2][2] = {
+        {1.0, 0.0},
+        {-dt, 1.0}
+    };
+
+    P[0][0] = P_pred[0][0]*Ft[0][0] + P_pred[0][1]*Ft[1][0] + Q_angle;
+    P[0][1] = P_pred[0][0]*Ft[0][1] + P_pred[0][1]*Ft[1][1];
+    P[1][0] = P_pred[1][0]*Ft[0][0] + P_pred[1][1]*Ft[1][0];
+    P[1][1] = P_pred[1][0]*Ft[0][1] + P_pred[1][1]*Ft[1][1] + Q_bias;
+
+    // Measurement matrix H (Jacobian): H = [1, 0]
+    // Innovation
+    double y = newAngle - angle;
+
+    // Innovation covariance: S = H * P * H^T + R
     double S = P[0][0] + R_measure;
+
+    // Kalman Gain: K = P * H^T / S
     double K[2];
     K[0] = P[0][0] / S;
     K[1] = P[1][0] / S;
 
-    double y = newAngle - angle;
+    // State update
     angle += K[0] * y;
-    bias += K[1] * y;
+    bias  += K[1] * y;
 
-    double P00_temp = P[0][0], P01_temp = P[0][1];
+    // Covariance update: P = (I - K*H)*P
+    double P00_temp = P[0][0];
+    double P01_temp = P[0][1];
     P[0][0] -= K[0] * P00_temp;
     P[0][1] -= K[0] * P01_temp;
     P[1][0] -= K[1] * P00_temp;
