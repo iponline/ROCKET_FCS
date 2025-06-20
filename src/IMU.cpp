@@ -87,9 +87,41 @@ bool IMU::EKFData(FilteredData& fdata, double dt){
     double accXangle = atan2(data.ay, data.az) * rad2deg;
     double accYangle = atan2(-data.ax, sqrt(data.ay * data.ay + data.az * data.az)) * rad2deg;
 
+    double EKFAngleX = EKF_filter(angleX, biasX, rateX, PX, data.gx, accXangle, dt);
+    double EKFAngleY = EKF_filter(angleY, biasY, rateY, PY, data.gy, accYangle, dt);
+
+    // ---------- Low Pass Filter 50Hz ----------
+    static double lpfX = 0.0;
+    static double lpfY = 0.0;
+    const float alpha = 0.7304f; // สำหรับ 50Hz ที่ 1kHz
+ 
+    lpfX = alpha * lpfX + (1.0 - alpha) * EKFAngleX;
+    lpfY = alpha * lpfY + (1.0 - alpha) * EKFAngleY;
+ 
+    //fdata.kalAngleX = lpfX;
+    //fdata.kalAngleY = lpfY;
+
+    // ---------- ส่งข้อมูลออกที่ 100Hz เท่านั้น ----------
+    static int sample_count = 0;
+    sample_count++;
+    if (sample_count >= 10) { // เรียก 10 รอบ = 10ms = 100Hz ที่ fs = 1000Hz
+        sample_count = 0;
+        fdata.kalAngleX = lpfX;
+        fdata.kalAngleY = lpfY;
+        return true; // อัปเดต fdata และแจ้งว่าส่งข้อมูล
+    } else {
+        return false; // ข้ามการอัปเดต fdata
+    }
+
+
+
     // ใช้ Kalman_filter สำหรับแต่ละแกน
-    fdata.kalAngleX = EKF_filter(angleX, biasX, rateX, PX, data.gx, accXangle, dt);
-    fdata.kalAngleY = EKF_filter(angleY, biasY, rateY, PY, data.gy, accYangle, dt);
+    //fdata.kalAngleX = EKF_filter(angleX, biasX, rateX, PX, data.gx, accXangle, dt);
+   // fdata.kalAngleY = EKF_filter(angleY, biasY, rateY, PY, data.gy, accYangle, dt);
+
+    //static double lpfX = 0, lpfY = 0;
+    ///const float alpha = 0.7304f; // สำหรับ 50Hz ที่ 1kHz
+
 
     return true;
 
@@ -204,6 +236,9 @@ void IMU::setCalibration(const IMUCalibration& cal) {
     calib = cal;
 }
 
+float IMU::lowPassFilter(float newValue, float prevValue, float alpha) {
+    return alpha * prevValue + (1.0f - alpha) * newValue;
+}
 
 
 

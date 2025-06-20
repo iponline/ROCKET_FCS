@@ -143,10 +143,10 @@ static void PID_Control(void*) {
         curAtt = attitude;
         xSemaphoreGive(attitudeMutex);
 
-        Serial.print(attitude.pitch);
-        Serial.print(",");
-        Serial.print(attitude.roll);
-        Serial.println();
+        // Serial.print(attitude.pitch);
+        // Serial.print(",");
+        // Serial.print(attitude.roll);
+        // Serial.println();
 
         float dt = 1; // 1 ms = 1000Hz
 

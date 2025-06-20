@@ -23,6 +23,13 @@ struct FilteredData{
     double kalAngleY;
 };
 
+struct LPFData{
+
+    double lpfX;
+    double lpfY;
+    
+};
+
 struct IMU_Data {
     float ax, ay, az;
     float temp;
@@ -48,6 +55,7 @@ public:
     //double Kalman_filter(double angle, double gyroRate, double accelAngle, double dt);
     double EKF_filter(double& angle, double& bias, double& rate, double P[2][2],
         double newRate, double newAngle, double dt);
+    float lowPassFilter(float newValue, float prevValue, float alpha);
 
 private:
 
