@@ -19,8 +19,11 @@ struct RawIMUData {
 };
 
 struct FilteredData{
-    double kalAngleX;
-    double kalAngleY;
+    //double kalAngleX;
+    //double kalAngleY;
+    double roll;
+    double pitch;
+    double yaw;
 };
 
 struct LPFData{
@@ -41,13 +44,23 @@ struct IMUCalibration {
     float gx_offset, gy_offset, gz_offset;
 };
 
+struct Quaternion {
+    double w, x, y, z;
+};
+
+struct EKFStateQ {
+    Quaternion q;
+    double bg[3];    // Gyro bias (x, y, z)
+    double P[7][7];  // Covariance
+};
+
 class IMU {
 public:
     IMU(uint8_t address = MPU6050_DEVICE_ID, TwoWire& w = Wire);
     bool begin();
     bool readRaw(RawIMUData& data);
     bool IMUData(IMU_Data& data, const RawIMUData& raw);
-    bool EKFData(FilteredData& fdata, double dt);
+    //bool EKFData(FilteredData& fdata, double dt);
     void wakeup();
     bool enableDataReadyInterrupt();
     bool calibrate(IMUCalibration& cal, int samples = 500, int delay_ms = 2);
@@ -57,11 +70,17 @@ public:
         double newRate, double newAngle, double dt);
     float lowPassFilter(float newValue, float prevValue, float alpha);
 
+    // EKF Quaternion (3D)
+    void EKFInitQ();  // Init quaternion EKF state
+    bool EKFQuaternionData(FilteredData& fdata, double dt);  // Main loop call
+
 private:
 
     uint8_t addr;
     TwoWire& wire;
     IMUCalibration calib = {0,0,0,0,0,0};
+    // --- เพิ่ม state สำหรับ quaternion EKF
+    EKFStateQ ekfQ;
   
     bool readRegisters(uint8_t reg, uint8_t* buf, uint8_t len);
 
@@ -70,6 +89,13 @@ private:
     double PX[2][2] = {{0, 0}, {0, 0}};
     double angleY = 0, biasY = 0, rateY = 0;
     double PY[2][2] = {{0, 0}, {0, 0}};
+
+    void EKFPredictQ(EKFStateQ& ekf, double gx, double gy, double gz, double dt);
+    void EKFUpdateQ(EKFStateQ& ekf, double ax, double ay, double az);
+    void quaternionToEuler(const Quaternion& q, double& roll, double& pitch, double& yaw) const;
+
+   
+
 };
 
 #endif

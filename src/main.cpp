@@ -36,14 +36,15 @@ static void IMU_read(void*) {
 
     RawIMUData rawData;
     IMU_Data imuData;
+    FilteredData fdata;
 
-    imu.begin();  // เริ่มการทำงานของ MPU6050
+    imu.begin();  
     imu.calibrate(cal, 5000, 2); // ทำการ Calibrate IMU
+    imu.EKFInitQ();              // **เริ่มต้น EKF Quaternion**
 
     static uint32_t lastTick = 0;
     const TickType_t xFrequency = pdMS_TO_TICKS(1); // 1 ms = 1000 Hz
 
-    // เก็บเวลาเริ่มต้น
     lastTick = millis();
 
     while (true) {
@@ -53,28 +54,31 @@ static void IMU_read(void*) {
         if (dt <= 0.0) dt = 0.001;              // ป้องกันไม่ให้ dt เป็น 0 
         lastTick = now;
 
-        imu.EKFData(fdata, dt);              // คำนวณหา Pitch และ Roll ผ่าน Kalman filter
+        // ---- คำนวณ Attitude (Quaternion EKF) ----
+        if (imu.EKFQuaternionData(fdata, dt)) { 
+            // ส่งออกค่า roll/pitch/yaw ทุก 10ms (100Hz) ที่ผ่าน LPF
+            Serial.print(millis());
+            Serial.print(",");
+            Serial.print(fdata.roll, 2);
+            Serial.print(",");
+            Serial.print(fdata.pitch, 2);
+            Serial.print(",");
+            Serial.println(fdata.yaw, 2);
 
-        Serial.print(millis());
-        Serial.print(",");
-        Serial.print(fdata.kalAngleX, 2);
-        Serial.print(",");
-        Serial.println(fdata.kalAngleY, 2);
+            // เขียนค่า attitude แบบ thread-safe
+            xSemaphoreTake(attitudeMutex, portMAX_DELAY);
+            attitude.pitch = fdata.pitch;  // degree
+            attitude.roll  = fdata.roll;   // degree
+            attitude.yaw   = fdata.yaw;    // degree
+            xSemaphoreGive(attitudeMutex);
+        }
 
+        // ---- IMU Raw/Calibrated Data ส่งผ่าน queue ----
         imu.readRaw(rawData);
         imu.IMUData(imuData, rawData);
-
         xQueueSend(imuQueue, &imuData, 0); // Non-blocking send
-        //vTaskDelay(interval);
 
-        // เขียนค่า attitude แบบ thread-safe
-        xSemaphoreTake(attitudeMutex, portMAX_DELAY);
-        attitude.pitch = fdata.kalAngleX;
-        attitude.roll  = fdata.kalAngleX;
-        xSemaphoreGive(attitudeMutex);
-
-        // Delay ให้ครบ 1ms
-        vTaskDelay(xFrequency);
+        vTaskDelay(xFrequency); // Delay ให้ครบ 1ms (1000Hz)
     }
 }
 

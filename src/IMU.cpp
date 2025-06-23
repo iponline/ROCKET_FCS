@@ -1,5 +1,43 @@
 #include <Wire.h>
 #include "IMU.h"
+#include <math.h>
+
+// Helper: multiply matrix (a: m x n, b: n x p) → out: m x p
+void matMult(double* a, double* b, double* out, int m, int n, int p) {
+    for (int i=0;i<m;i++)
+        for (int j=0;j<p;j++) {
+            out[i*p+j]=0;
+            for (int k=0;k<n;k++)
+                out[i*p+j] += a[i*n+k]*b[k*p+j];
+        }
+}
+
+// Helper: transpose
+void matTrans(double* a, double* out, int m, int n) {
+    for(int i=0;i<m;i++)
+        for(int j=0;j<n;j++)
+            out[j*m+i] = a[i*n+j];
+}
+
+// Helper: inverse 3x3 (basic, assume det≠0)
+bool matInv3(double* in, double* out) {
+    double det = in[0]*(in[4]*in[8]-in[5]*in[7]) - in[1]*(in[3]*in[8]-in[5]*in[6]) + in[2]*(in[3]*in[7]-in[4]*in[6]);
+    if (fabs(det) < 1e-9) return false;
+    out[0] = (in[4]*in[8]-in[5]*in[7])/det;
+    out[1] = (in[2]*in[7]-in[1]*in[8])/det;
+    out[2] = (in[1]*in[5]-in[2]*in[4])/det;
+    out[3] = (in[5]*in[6]-in[3]*in[8])/det;
+    out[4] = (in[0]*in[8]-in[2]*in[6])/det;
+    out[5] = (in[2]*in[3]-in[0]*in[5])/det;
+    out[6] = (in[3]*in[7]-in[4]*in[6])/det;
+    out[7] = (in[1]*in[6]-in[0]*in[7])/det;
+    out[8] = (in[0]*in[4]-in[1]*in[3])/det;
+    return true;
+}
+
+
+
+
 
 IMU::IMU(uint8_t address, TwoWire& w) : addr(address), wire(w) {}
 
@@ -76,118 +114,118 @@ bool IMU::readRegisters(uint8_t reg, uint8_t* buf, uint8_t len) {
     return true;
 }
 
-bool IMU::EKFData(FilteredData& fdata, double dt){
+// bool IMU::EKFData(FilteredData& fdata, double dt){
     
-    RawIMUData raw;
-    IMU_Data data;
-    readRaw(raw);
-    IMUData(data, raw);
+//     RawIMUData raw;
+//     IMU_Data data;
+//     readRaw(raw);
+//     IMUData(data, raw);
 
-    double rad2deg = 57.29578;
-    double accXangle = atan2(data.ay, data.az) * rad2deg;
-    double accYangle = atan2(-data.ax, sqrt(data.ay * data.ay + data.az * data.az)) * rad2deg;
+//     double rad2deg = 57.29578;
+//     double accXangle = atan2(data.ay, data.az) * rad2deg;
+//     double accYangle = atan2(-data.ax, sqrt(data.ay * data.ay + data.az * data.az)) * rad2deg;
 
-    double EKFAngleX = EKF_filter(angleX, biasX, rateX, PX, data.gx, accXangle, dt);
-    double EKFAngleY = EKF_filter(angleY, biasY, rateY, PY, data.gy, accYangle, dt);
+//     double EKFAngleX = EKF_filter(angleX, biasX, rateX, PX, data.gx, accXangle, dt);
+//     double EKFAngleY = EKF_filter(angleY, biasY, rateY, PY, data.gy, accYangle, dt);
 
-    // ---------- Low Pass Filter 50Hz ----------
-    static double lpfX = 0.0;
-    static double lpfY = 0.0;
-    const float alpha = 0.7304f; // สำหรับ 50Hz ที่ 1kHz
+//     // ---------- Low Pass Filter 50Hz ----------
+//     static double lpfX = 0.0;
+//     static double lpfY = 0.0;
+//     const float alpha = 0.7304f; // สำหรับ 50Hz ที่ 1kHz
  
-    lpfX = alpha * lpfX + (1.0 - alpha) * EKFAngleX;
-    lpfY = alpha * lpfY + (1.0 - alpha) * EKFAngleY;
+//     lpfX = alpha * lpfX + (1.0 - alpha) * EKFAngleX;
+//     lpfY = alpha * lpfY + (1.0 - alpha) * EKFAngleY;
  
-    //fdata.kalAngleX = lpfX;
-    //fdata.kalAngleY = lpfY;
+//     //fdata.kalAngleX = lpfX;
+//     //fdata.kalAngleY = lpfY;
 
-    // ---------- ส่งข้อมูลออกที่ 100Hz เท่านั้น ----------
-    static int sample_count = 0;
-    sample_count++;
-    if (sample_count >= 10) { // เรียก 10 รอบ = 10ms = 100Hz ที่ fs = 1000Hz
-        sample_count = 0;
-        fdata.kalAngleX = lpfX;
-        fdata.kalAngleY = lpfY;
-        return true; // อัปเดต fdata และแจ้งว่าส่งข้อมูล
-    } else {
-        return false; // ข้ามการอัปเดต fdata
-    }
-
-
-
-    // ใช้ Kalman_filter สำหรับแต่ละแกน
-    //fdata.kalAngleX = EKF_filter(angleX, biasX, rateX, PX, data.gx, accXangle, dt);
-   // fdata.kalAngleY = EKF_filter(angleY, biasY, rateY, PY, data.gy, accYangle, dt);
-
-    //static double lpfX = 0, lpfY = 0;
-    ///const float alpha = 0.7304f; // สำหรับ 50Hz ที่ 1kHz
+//     // ---------- ส่งข้อมูลออกที่ 100Hz เท่านั้น ----------
+//     static int sample_count = 0;
+//     sample_count++;
+//     if (sample_count >= 10) { // เรียก 10 รอบ = 10ms = 100Hz ที่ fs = 1000Hz
+//         sample_count = 0;
+//         fdata.kalAngleX = lpfX;
+//         fdata.kalAngleY = lpfY;
+//         return true; // อัปเดต fdata และแจ้งว่าส่งข้อมูล
+//     } else {
+//         return false; // ข้ามการอัปเดต fdata
+//     }
 
 
-    return true;
 
-}
+//     // ใช้ Kalman_filter สำหรับแต่ละแกน
+//     //fdata.kalAngleX = EKF_filter(angleX, biasX, rateX, PX, data.gx, accXangle, dt);
+//    // fdata.kalAngleY = EKF_filter(angleY, biasY, rateY, PY, data.gy, accYangle, dt);
 
-double IMU::EKF_filter(double& angle, double& bias, double& rate, double P[2][2],
-    double newRate, double newAngle, double dt) {
+//     //static double lpfX = 0, lpfY = 0;
+//     ///const float alpha = 0.7304f; // สำหรับ 50Hz ที่ 1kHz
 
-    // Process and measurement noise
-    const double Q_angle = 0.001, Q_bias = 0.003, R_measure = 0.03;
 
-    // State prediction
-    rate = newRate - bias;
-    angle += dt * rate;
+//     return true;
 
-    // Jacobian of the state transition (F)
-    // F = [[1, -dt],
-    //      [0,  1]]
-    double F[2][2] = {
-        {1.0, -dt},
-        {0.0, 1.0}
-    };
+// }
 
-    // Process covariance prediction: P = F * P * F^T + Q
-    double P_pred[2][2];
-    P_pred[0][0] = F[0][0]*P[0][0] + F[0][1]*P[1][0];
-    P_pred[0][1] = F[0][0]*P[0][1] + F[0][1]*P[1][1];
-    P_pred[1][0] = F[1][0]*P[0][0] + F[1][1]*P[1][0];
-    P_pred[1][1] = F[1][0]*P[0][1] + F[1][1]*P[1][1];
+// double IMU::EKF_filter(double& angle, double& bias, double& rate, double P[2][2],
+//     double newRate, double newAngle, double dt) {
 
-    double Ft[2][2] = {
-        {1.0, 0.0},
-        {-dt, 1.0}
-    };
+//     // Process and measurement noise
+//     const double Q_angle = 0.001, Q_bias = 0.003, R_measure = 0.03;
 
-    P[0][0] = P_pred[0][0]*Ft[0][0] + P_pred[0][1]*Ft[1][0] + Q_angle;
-    P[0][1] = P_pred[0][0]*Ft[0][1] + P_pred[0][1]*Ft[1][1];
-    P[1][0] = P_pred[1][0]*Ft[0][0] + P_pred[1][1]*Ft[1][0];
-    P[1][1] = P_pred[1][0]*Ft[0][1] + P_pred[1][1]*Ft[1][1] + Q_bias;
+//     // State prediction
+//     rate = newRate - bias;
+//     angle += dt * rate;
 
-    // Measurement matrix H (Jacobian): H = [1, 0]
-    // Innovation
-    double y = newAngle - angle;
+//     // Jacobian of the state transition (F)
+//     // F = [[1, -dt],
+//     //      [0,  1]]
+//     double F[2][2] = {
+//         {1.0, -dt},
+//         {0.0, 1.0}
+//     };
 
-    // Innovation covariance: S = H * P * H^T + R
-    double S = P[0][0] + R_measure;
+//     // Process covariance prediction: P = F * P * F^T + Q
+//     double P_pred[2][2];
+//     P_pred[0][0] = F[0][0]*P[0][0] + F[0][1]*P[1][0];
+//     P_pred[0][1] = F[0][0]*P[0][1] + F[0][1]*P[1][1];
+//     P_pred[1][0] = F[1][0]*P[0][0] + F[1][1]*P[1][0];
+//     P_pred[1][1] = F[1][0]*P[0][1] + F[1][1]*P[1][1];
 
-    // Kalman Gain: K = P * H^T / S
-    double K[2];
-    K[0] = P[0][0] / S;
-    K[1] = P[1][0] / S;
+//     double Ft[2][2] = {
+//         {1.0, 0.0},
+//         {-dt, 1.0}
+//     };
 
-    // State update
-    angle += K[0] * y;
-    bias  += K[1] * y;
+//     P[0][0] = P_pred[0][0]*Ft[0][0] + P_pred[0][1]*Ft[1][0] + Q_angle;
+//     P[0][1] = P_pred[0][0]*Ft[0][1] + P_pred[0][1]*Ft[1][1];
+//     P[1][0] = P_pred[1][0]*Ft[0][0] + P_pred[1][1]*Ft[1][0];
+//     P[1][1] = P_pred[1][0]*Ft[0][1] + P_pred[1][1]*Ft[1][1] + Q_bias;
 
-    // Covariance update: P = (I - K*H)*P
-    double P00_temp = P[0][0];
-    double P01_temp = P[0][1];
-    P[0][0] -= K[0] * P00_temp;
-    P[0][1] -= K[0] * P01_temp;
-    P[1][0] -= K[1] * P00_temp;
-    P[1][1] -= K[1] * P01_temp;
+//     // Measurement matrix H (Jacobian): H = [1, 0]
+//     // Innovation
+//     double y = newAngle - angle;
 
-    return angle;
-}
+//     // Innovation covariance: S = H * P * H^T + R
+//     double S = P[0][0] + R_measure;
+
+//     // Kalman Gain: K = P * H^T / S
+//     double K[2];
+//     K[0] = P[0][0] / S;
+//     K[1] = P[1][0] / S;
+
+//     // State update
+//     angle += K[0] * y;
+//     bias  += K[1] * y;
+
+//     // Covariance update: P = (I - K*H)*P
+//     double P00_temp = P[0][0];
+//     double P01_temp = P[0][1];
+//     P[0][0] -= K[0] * P00_temp;
+//     P[0][1] -= K[0] * P01_temp;
+//     P[1][0] -= K[1] * P00_temp;
+//     P[1][1] -= K[1] * P01_temp;
+
+//     return angle;
+// }
 
 
 bool IMU::enableDataReadyInterrupt() {
@@ -238,6 +276,191 @@ void IMU::setCalibration(const IMUCalibration& cal) {
 
 float IMU::lowPassFilter(float newValue, float prevValue, float alpha) {
     return alpha * prevValue + (1.0f - alpha) * newValue;
+}
+
+void IMU::EKFInitQ() {
+
+    ekfQ.q = {1, 0, 0, 0};
+    ekfQ.bg[0] = ekfQ.bg[1] = ekfQ.bg[2] = 0;
+    memset(ekfQ.P, 0, sizeof(ekfQ.P));
+    for (int i=0;i<7;i++) ekfQ.P[i][i] = 0.01;
+
+}
+
+void IMU::EKFPredictQ(EKFStateQ& ekf, double gx, double gy, double gz, double dt) {
+
+    // Gyro - bias
+    double wx = gx - ekf.bg[0];
+    double wy = gy - ekf.bg[1];
+    double wz = gz - ekf.bg[2];
+
+    // Convert to rad/s if จำเป็น (หากยังเป็น deg/s)
+    wx *= (M_PI/180.0);
+    wy *= (M_PI/180.0);
+    wz *= (M_PI/180.0);
+
+    // Quaternion propagation (see earlier answer)
+    double qw = ekf.q.w, qx = ekf.q.x, qy = ekf.q.y, qz = ekf.q.z;
+    double dq_w = 0.5 * (-qx*wx - qy*wy - qz*wz);
+    double dq_x = 0.5 * (qw*wx + qy*wz - qz*wy);
+    double dq_y = 0.5 * (qw*wy - qx*wz + qz*wx);
+    double dq_z = 0.5 * (qw*wz + qx*wy - qy*wx);
+
+    ekf.q.w += dq_w * dt;
+    ekf.q.x += dq_x * dt;
+    ekf.q.y += dq_y * dt;
+    ekf.q.z += dq_z * dt;
+
+    // Normalize
+    double norm = sqrt(ekf.q.w*ekf.q.w + ekf.q.x*ekf.q.x + ekf.q.y*ekf.q.y + ekf.q.z*ekf.q.z);
+    ekf.q.w /= norm; ekf.q.x /= norm; ekf.q.y /= norm; ekf.q.z /= norm;
+
+    // Bias assumed constant; process noise can be added if ต้องการ
+
+    // Covariance update (approx. as Identity + Q)
+    double Q[7][7] = {0};
+    const double q_gyro = 1e-5, q_bias = 1e-7; // ปรับได้ตาม IMU
+    for (int i=0; i<4; i++) Q[i][i] = q_gyro;
+    for (int i=4; i<7; i++) Q[i][i] = q_bias;
+    for(int i=0;i<7;++i)
+        for(int j=0;j<7;++j)
+            ekf.P[i][j] += Q[i][j];
+}
+
+void IMU::EKFUpdateQ(EKFStateQ& ekf, double ax, double ay, double az) {
+
+    // Normalize accel
+    double norm = sqrt(ax*ax + ay*ay + az*az);
+    if (norm < 1e-6) return;
+    ax /= norm; ay /= norm; az /= norm;
+
+    // Predict gravity from quaternion (โลก = [0 0 1])
+    double qw = ekf.q.w, qx = ekf.q.x, qy = ekf.q.y, qz = ekf.q.z;
+    double g_b[3];
+    g_b[0] = 2*(qx*qz - qw*qy);
+    g_b[1] = 2*(qw*qx + qy*qz);
+    g_b[2] = qw*qw - qx*qx - qy*qy + qz*qz;
+
+    // Innovation (measurement residual): y = z - h(x)
+    double y[3] = { ax - g_b[0], ay - g_b[1], az - g_b[2] };
+
+    // -------- Jacobian H (3x7) --------
+    double H[3][7] = {0};
+
+    // Partial derivatives for g_b w.r.t. quaternion (see paper, here for scalar-first [w, x, y, z]):
+    H[0][0] = -2*qy;          // ∂g_bx/∂qw
+    H[0][1] =  2*qz;          // ∂g_bx/∂qx
+    H[0][2] = -2*qw;          // ∂g_bx/∂qy
+    H[0][3] =  2*qx;          // ∂g_bx/∂qz
+
+    H[1][0] =  2*qx;
+    H[1][1] =  2*qw;
+    H[1][2] =  2*qz;
+    H[1][3] =  2*qy;
+
+    H[2][0] =  2*qw;
+    H[2][1] = -2*qx;
+    H[2][2] = -2*qy;
+    H[2][3] =  2*qz;
+    // w.r.t bias is zero (cols 4,5,6)
+
+    // -------- Measurement noise (3x3) --------
+    double R[3][3] = { {0.01,0,0}, {0,0.01,0}, {0,0,0.01} }; // Tune as needed
+
+    // ---- S = H*P*H^T + R (3x3) ----
+    double PHt[7][3] = {0}; // P*H^T
+    for(int i=0;i<7;++i) for(int j=0;j<3;++j)
+        for(int k=0;k<7;++k)
+            PHt[i][j] += ekf.P[i][k]*H[j][k];
+
+    double S[3][3] = {0};
+    for(int i=0;i<3;++i) for(int j=0;j<3;++j)
+        for(int k=0;k<7;++k)
+            S[i][j] += H[i][k]*PHt[k][j];
+    for(int i=0;i<3;++i) for(int j=0;j<3;++j)
+        S[i][j] += R[i][j];
+
+    // ---- Kalman Gain: K = P*H^T*inv(S) (7x3) ----
+    double Sinv[3][3];
+    if(!matInv3((double*)S, (double*)Sinv)) return; // Safety
+
+    double K[7][3] = {0};
+    for(int i=0;i<7;++i)
+        for(int j=0;j<3;++j)
+            for(int k=0;k<3;++k)
+                K[i][j] += PHt[i][k]*Sinv[k][j];
+
+    // ---- State update: x = x + K*y ----
+    double dx[7] = {0};
+    for(int i=0;i<7;++i)
+        for(int j=0;j<3;++j)
+            dx[i] += K[i][j]*y[j];
+
+    // Quaternion update:  
+    ekf.q.w += dx[0];
+    ekf.q.x += dx[1];
+    ekf.q.y += dx[2];
+    ekf.q.z += dx[3];
+    // Normalize
+    double qnorm = sqrt(ekf.q.w*ekf.q.w + ekf.q.x*ekf.q.x + ekf.q.y*ekf.q.y + ekf.q.z*ekf.q.z);
+    ekf.q.w /= qnorm; ekf.q.x /= qnorm; ekf.q.y /= qnorm; ekf.q.z /= qnorm;
+
+    // Bias update:
+    ekf.bg[0] += dx[4];
+    ekf.bg[1] += dx[5];
+    ekf.bg[2] += dx[6];
+
+    // ---- Covariance update: P = (I - K*H)*P ----
+    double KH[7][7] = {0};
+    for(int i=0;i<7;++i)
+        for(int j=0;j<7;++j)
+            for(int k=0;k<3;++k)
+                KH[i][j] += K[i][k]*H[k][j];
+
+    for(int i=0;i<7;++i)
+        for(int j=0;j<7;++j)
+            ekf.P[i][j] -= KH[i][j]*ekf.P[i][j];
+}
+
+
+void IMU::quaternionToEuler(const Quaternion& q, double& roll, double& pitch, double& yaw) const {
+    roll = atan2(2.0 * (q.w*q.x + q.y*q.z), 1.0 - 2.0 * (q.x*q.x + q.y*q.y));
+    pitch = asin(2.0 * (q.w*q.y - q.z*q.x));
+    yaw = atan2(2.0 * (q.w*q.z + q.x*q.y), 1.0 - 2.0 * (q.y*q.y + q.z*q.z));
+}
+
+
+bool IMU::EKFQuaternionData(FilteredData& fdata, double dt) {
+
+    RawIMUData raw;
+    IMU_Data data;
+    readRaw(raw);
+    IMUData(data, raw);
+
+    EKFPredictQ(ekfQ, data.gx, data.gy, data.gz, dt);   // 1. Prediction
+    EKFUpdateQ(ekfQ, data.ax, data.ay, data.az);        // 2. Update
+
+    double roll, pitch, yaw;
+    quaternionToEuler(ekfQ.q, roll, pitch, yaw);
+
+    // ----------- LPF 50Hz (1000Hz loop) -----------
+    static double lpfRoll = 0.0, lpfPitch = 0.0, lpfYaw = 0.0;
+    const float alpha = 0.7304f;
+    lpfRoll  = alpha * lpfRoll  + (1.0 - alpha) * roll;
+    lpfPitch = alpha * lpfPitch + (1.0 - alpha) * pitch;
+    lpfYaw   = alpha * lpfYaw   + (1.0 - alpha) * yaw;
+
+    static int sample_count = 0;
+    sample_count++;
+    if (sample_count >= 10) {
+        sample_count = 0;
+        fdata.roll  = lpfRoll  * 57.29578;
+        fdata.pitch = lpfPitch * 57.29578;
+        fdata.yaw   = lpfYaw   * 57.29578;
+        return true;
+    } else {
+        return false;
+    }
 }
 
 

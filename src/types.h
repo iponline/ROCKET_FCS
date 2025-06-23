@@ -16,6 +16,7 @@ typedef struct {
 struct Attitude {
     float pitch;
     float roll;
+    float yaw;
 };
 
 #endif
