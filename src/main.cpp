@@ -61,9 +61,9 @@ static void IMU_read(void*) {
             Serial.print(",");
             Serial.print(fdata.roll, 2);
             Serial.print(",");
-            Serial.print(fdata.pitch, 2);
-            Serial.print(",");
-            Serial.println(fdata.yaw, 2);
+            Serial.println(fdata.pitch, 2);
+            //Serial.print(",");
+            //Serial.println(fdata.yaw, 2);
 
             // เขียนค่า attitude แบบ thread-safe
             xSemaphoreTake(attitudeMutex, portMAX_DELAY);
