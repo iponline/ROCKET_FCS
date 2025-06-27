@@ -14,6 +14,8 @@
 #include "Telemetry.h"
 #include "PID.h"
 #include "Servo.h"
+#include "Arduino.h"
+#include "PPMEncoder.h"
 
 IMU imu;
 Telemetry telem;
@@ -23,7 +25,8 @@ IMUCalibration cal;
 QueueHandle_t imuQueue;
 
 Attitude attitude;          // เก็บค่า Pitch, Roll ล่าสุด (ใช้แชร์ข้าม Task)
-SemaphoreHandle_t attitudeMutex;  // Mutex สำหรับป้องกันข้อมูลชนกัน
+SemaphoreHandle_t attitudeMutex,setpointMutex;  // Mutex สำหรับป้องกันข้อมูลชนกัน
+volatile float setpointPitch = 0, setpointRoll = 0;
 
 Servo servoPitch, servoRoll;
 
@@ -106,30 +109,49 @@ void telemetryTaskTX(void* pvParameters) {
     }
   }
 
-// void telemetryTaskRX(void* pvParameters) {
+  void telemetryTaskRX(void* pvParameters) {
 
-//     uint8_t type;
-//     uint8_t payload[256];
-//     uint8_t len;
-  
-//     while (1) {
+    uint8_t type;
+    uint8_t payload[256];
+    uint8_t len;
 
-//       if (telem.receivePacket(&type, payload, &len)) {
-//         Serial.print("RX Packet Type: ");
-//         Serial.println(type);
-//         Serial.print("Payload: ");
+    while (1) {
+        if (telem.receivePacket(&type, payload, &len)) {
+            switch (type) {
 
-//         for (uint8_t i = 0; i < len; i++) {
+                case 0x20: // Set PID gains
+                    if (len >= 12) {
+                        float kp, ki, kd;
+                        memcpy(&kp, payload, 4);
+                        memcpy(&ki, payload + 4, 4);
+                        memcpy(&kd, payload + 8, 4);
+                        pidPitch.setTunings(kp, ki, kd); // Or use mutex if needed
+                        pidRoll.setTunings(kp, ki, kd);
+                    }
+                    break;
 
-//           Serial.write(payload[i]);
+                case 0x21: // Set setpoint
+                    if (len >= 8) {
 
-//         }
-//         Serial.println();
-//       }
-  
-//       vTaskDelay(pdMS_TO_TICKS(10)); // Yield to other tasks
-//     }
-// }
+                        float newPitch, newRoll;
+                        memcpy(&newPitch, payload, 4);
+                        memcpy(&newRoll, payload + 4, 4);
+
+                        xSemaphoreTake(setpointMutex, portMAX_DELAY);
+                        setpointPitch = newPitch;
+                        setpointRoll = newRoll;
+                        xSemaphoreGive(setpointMutex);
+                    }
+                    break;
+                // ... other command cases
+                default:
+                    break;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(10)); // Yield
+    }
+}
+
 
 
 static void PID_Control(void*) {
@@ -200,6 +222,13 @@ FLASHMEM __attribute__((noinline)) void setup() {
     attitudeMutex = xSemaphoreCreateMutex();
     if (attitudeMutex == NULL) {
         Serial.println("Failed to create attitudeMutex!");
+        while (1); // halt
+    }
+
+    // Create mutex before tasks use it
+    setpointMutex = xSemaphoreCreateMutex();
+    if (setpointMutex == NULL) {
+        Serial.println("Failed to create setpointMutex!");
         while (1); // halt
     }
 
