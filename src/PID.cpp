@@ -12,7 +12,7 @@ void PID::setLimits(float minOut, float maxOut) {
 }
 
 void PID::reset() {
-    _integral = 0;
+    _integral = 0; 
     _prevError = 0;
 }
 

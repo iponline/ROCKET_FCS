@@ -17,12 +17,3 @@ void EEPROM_read(int address, T& value) {
     }
 }
 
-// Explicit template instantiation for the types you use
-//template void EEPROM_write<float>(int, const float&);
-//template void EEPROM_read<float>(int, float&);
-
-//template void EEPROM_write<uint16_t>(int, const uint16_t&);
-//template void EEPROM_read<uint16_t>(int, uint16_t&);
-
-//template void EEPROM_write<PIDGains>(int, const PIDGains&);
-//template void EEPROM_read<PIDGains>(int, PIDGains&);

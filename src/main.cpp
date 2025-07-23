@@ -15,7 +15,10 @@
 #include "PID.h"
 #include "Servo.h"
 #include "Arduino.h"
-#include "PPMEncoder.h"
+#include "PPMControl.h"   
+#include "def.h"
+
+
 
 IMU imu;
 Telemetry telem;
@@ -23,22 +26,21 @@ FilteredData fdata;
 IMUCalibration cal;
 
 QueueHandle_t imuQueue;
-
 Attitude attitude;          // เก็บค่า Pitch, Roll ล่าสุด (ใช้แชร์ข้าม Task)
 SemaphoreHandle_t attitudeMutex,setpointMutex;  // Mutex สำหรับป้องกันข้อมูลชนกัน
 volatile float setpointPitch = 0, setpointRoll = 0;
 
-Servo servoPitch, servoRoll;
-
+Servo servoPitch, servoRoll, ppmServoRoll, ppmServoPitch, ppmServoThrottle;
 
 const float STABILITY_BAND = 1.0;  // degrees
 PID pidPitch(1.5, 0.5, 0.1);
 PID pidRoll(1.4, 0.5, 0.1);
 
+
 static void IMU_read(void*) {
 
-    RawIMUData rawData;
-    IMU_Data imuData;
+    //RawIMUData rawData;
+    //IMU_Data imuData;
     FilteredData fdata;
 
     imu.begin();  
@@ -70,44 +72,48 @@ static void IMU_read(void*) {
 
             // เขียนค่า attitude แบบ thread-safe
             xSemaphoreTake(attitudeMutex, portMAX_DELAY);
-            attitude.pitch = fdata.pitch;  // degree
+            attitude.pitch = fdata.pitch;  // degree -> convert double to float
             attitude.roll  = fdata.roll;   // degree
             attitude.yaw   = fdata.yaw;    // degree
             xSemaphoreGive(attitudeMutex);
         }
 
         // ---- IMU Raw/Calibrated Data ส่งผ่าน queue ----
-        imu.readRaw(rawData);
-        imu.IMUData(imuData, rawData);
-        xQueueSend(imuQueue, &imuData, 0); // Non-blocking send
+        //imu.readRaw(rawData);
+        //imu.IMUData(imuData, rawData);
+        //QueueSend(imuQueue, &imuData, 0); // Non-blocking send
 
-        vTaskDelay(xFrequency); // Delay ให้ครบ 1ms (1000Hz)
+        //vTaskDelay(xFrequency); // Delay ให้ครบ 1ms (1000Hz)
     }
 }
 
 void telemetryTaskTX(void* pvParameters) {
 
-    IMU_Data imuData;
+    float att_temp[3];      // roll, pitch, yaw
     uint8_t payload[12];
     uint8_t packet[64];
-  
+
     while (1) {
-      if (xQueueReceive(imuQueue, &imuData, pdMS_TO_TICKS(100))) {
+        // อ่าน attitude (roll, pitch, yaw) แบบ thread-safe
+        xSemaphoreTake(attitudeMutex, portMAX_DELAY);
+        att_temp[0] = attitude.roll;
+        att_temp[1] = attitude.pitch;
+        att_temp[2] = attitude.yaw;
+        xSemaphoreGive(attitudeMutex);
 
-        memcpy(payload + 0, &imuData.ax, 2);
-        memcpy(payload + 2, &imuData.ay, 2);
-        memcpy(payload + 4, &imuData.az, 2);
-        memcpy(payload + 6, &imuData.gx, 2);
-        memcpy(payload + 8, &imuData.gy, 2);
-        memcpy(payload + 10, &imuData.gz, 2);
-  
-        telem.buildPacket(0x10, (const char*)payload, 12, (char*)packet);
+        // Pack ค่า roll, pitch, yaw (float, 4 bytes) ลง payload
+        memcpy(payload + 0, &att_temp[0], 4);   // roll
+        memcpy(payload + 4, &att_temp[1], 4);   // pitch
+        memcpy(payload + 8, &att_temp[2], 4);   // yaw
 
-        telem.sendBinary((uint8_t*)packet, 3 + 12 + 1);
-        //Serial.println(packet);
-      }
+        // สร้าง packet และส่งออก
+        telem.buildPacket(0x10, (const uint8_t*)payload, 12, (uint8_t*)packet);
+        telem.sendBinary((uint8_t*)packet, 3 + 12 + 1); // header + payload + checksum
+
+        vTaskDelay(pdMS_TO_TICKS(10)); // ส่งออกทุก 10ms (100Hz) ปรับได้ตามต้องการ
     }
-  }
+}
+
 
   void telemetryTaskRX(void* pvParameters) {
 
@@ -119,16 +125,21 @@ void telemetryTaskTX(void* pvParameters) {
         if (telem.receivePacket(&type, payload, &len)) {
             switch (type) {
 
-                case 0x20: // Set PID gains
-                    if (len >= 12) {
-                        float kp, ki, kd;
-                        memcpy(&kp, payload, 4);
-                        memcpy(&ki, payload + 4, 4);
-                        memcpy(&kd, payload + 8, 4);
-                        pidPitch.setTunings(kp, ki, kd); // Or use mutex if needed
-                        pidRoll.setTunings(kp, ki, kd);
-                    }
-                    break;
+                case 0x20: // Set PID gains (6 floats = 24 bytes)
+                if (len >= 24) {
+
+                    float pitch_kp, pitch_ki, pitch_kd, roll_kp, roll_ki, roll_kd;
+                    memcpy(&pitch_kp, payload,      4);
+                    memcpy(&pitch_ki, payload + 4,  4);
+                    memcpy(&pitch_kd, payload + 8,  4);
+                    memcpy(&roll_kp,  payload + 12, 4);
+                    memcpy(&roll_ki,  payload + 16, 4);
+                    memcpy(&roll_kd,  payload + 20, 4);
+
+                    pidPitch.setTunings(pitch_kp, pitch_ki, pitch_kd); // Optionally use mutex if shared
+                    pidRoll.setTunings(roll_kp, roll_ki, roll_kd);
+                }
+                break;
 
                 case 0x21: // Set setpoint
                     if (len >= 8) {
@@ -143,6 +154,23 @@ void telemetryTaskTX(void* pvParameters) {
                         xSemaphoreGive(setpointMutex);
                     }
                     break;
+                
+                case 0x40:   
+                    if (len >= 1) {
+                        if (payload[0] == 0x02) {
+                            ppmControlEnabled = true;
+                        } else if (payload[0] == 0x00) {
+                            ppmControlEnabled = false;
+                        }
+                    }
+                    break;
+
+                case 0x40: // command FCC 
+                    if (len >=1){
+
+                        
+
+                    }
                 // ... other command cases
                 default:
                     break;
@@ -235,6 +263,7 @@ FLASHMEM __attribute__((noinline)) void setup() {
     xTaskCreate(IMU_read, "IMU", 1024, nullptr, 3, nullptr);
     xTaskCreate(PID_Control, "PID", 256, nullptr, 2, nullptr);
     xTaskCreate(telemetryTaskTX, "TX", 1024, NULL, 1, NULL);
+    xTaskCreate(ppmControlTask, "PPM", 512, NULL, 1, NULL);
     //xTaskCreate(telemetryTaskRX, "RX", 1024, NULL, 1, NULL);
 
     Serial.println("setup(): starting scheduler...");

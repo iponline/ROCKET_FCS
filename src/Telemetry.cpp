@@ -3,32 +3,34 @@
 #define TELEMETRY_SERIAL Serial1
 #define TELEMETRY_BAUD   57600
 
+
 void Telemetry::init() {
 
-  TELEMETRY_SERIAL.begin(TELEMETRY_BAUD);
-  delay(2000);
+    TELEMETRY_SERIAL.begin(TELEMETRY_BAUD);
+    delay(2000);
 
-  enterCommandMode();
+    enterCommandMode();
 
-  // 2->2400, 4->4800, 8->9600, 16->19200, 32->38400, 64->76800, 128->125000  
-  setAirDataRate(64); 
-  sendATCommand("AT&W");
-  sendATCommand("ATZ");
+    // 2->2400, 4->4800, 8->9600, 16->19200, 32->38400, 64->76800, 128->125000  
+    setAirDataRate(64); 
+    sendATCommand("AT&W");
+    sendATCommand("ATZ");
 
 }
 
+
 void Telemetry::enterCommandMode() {
 
-  delay(1000);
-  TELEMETRY_SERIAL.print("+++");
-  delay(1000);
+    delay(1000);
+    TELEMETRY_SERIAL.print("+++");
+    delay(1000);
 
-  unsigned long timeout = millis() + 1000;
-  while (millis() < timeout) {
-    while (TELEMETRY_SERIAL.available()) {
-      Serial.write(TELEMETRY_SERIAL.read());
+    unsigned long timeout = millis() + 1000;
+    while (millis() < timeout) {
+      while (TELEMETRY_SERIAL.available()) {
+        Serial.write(TELEMETRY_SERIAL.read());
+      }
     }
-  }
 }
 
 void Telemetry::sendATCommand(const char* cmd) {
