@@ -15,8 +15,12 @@
 #include "PID.h"
 #include "Servo.h"
 #include "Arduino.h"
-#include "PPMControl.h"   
+#include "PPMcontrol.h"   
 #include "def.h"
+
+#ifndef constrain
+#define constrain(amt, low, high) ((amt) < (low) ? (low) : ((amt) > (high) ? (high) : (amt)))
+#endif
 
 
 
@@ -30,11 +34,12 @@ Attitude attitude;          // เก็บค่า Pitch, Roll ล่าสุ
 SemaphoreHandle_t attitudeMutex,setpointMutex;  // Mutex สำหรับป้องกันข้อมูลชนกัน
 volatile float setpointPitch = 0, setpointRoll = 0;
 
-Servo servoPitch, servoRoll, ppmServoRoll, ppmServoPitch, ppmServoThrottle;
+Servo servoPitch, servoRoll;
+//ppmServoRoll, ppmServoPitch, ppmServoThrottle;
 
-const float STABILITY_BAND = 1.0;  // degrees
-PID pidPitch(1.5, 0.5, 0.1);
-PID pidRoll(1.4, 0.5, 0.1);
+const float STABILITY_BAND = 5.0;  // degrees
+PID pidPitch(0.8, 0.1, 0.1);
+PID pidRoll(0.8, 0.1, 0.1);
 
 
 static void IMU_read(void*) {
@@ -48,7 +53,7 @@ static void IMU_read(void*) {
     imu.EKFInitQ();              // **เริ่มต้น EKF Quaternion**
 
     static uint32_t lastTick = 0;
-    const TickType_t xFrequency = pdMS_TO_TICKS(1); // 1 ms = 1000 Hz
+    //const TickType_t xFrequency = pdMS_TO_TICKS(1); // 1 ms = 1000 Hz
 
     lastTick = millis();
 
@@ -72,6 +77,7 @@ static void IMU_read(void*) {
 
             // เขียนค่า attitude แบบ thread-safe
             xSemaphoreTake(attitudeMutex, portMAX_DELAY);
+            //Serial.println("In IMU xSemaphore!!!!");
             attitude.pitch = fdata.pitch;  // degree -> convert double to float
             attitude.roll  = fdata.roll;   // degree
             attitude.yaw   = fdata.yaw;    // degree
@@ -158,14 +164,14 @@ void telemetryTaskTX(void* pvParameters) {
                 case 0x40:   
                     if (len >= 1) {
                         if (payload[0] == 0x02) {
-                            ppmControlEnabled = true;
+                            //ppmControlEnabled = true;
                         } else if (payload[0] == 0x00) {
-                            ppmControlEnabled = false;
+                            //ppmControlEnabled = false;
                         }
                     }
                     break;
 
-                case 0x40: // command FCC 
+                case 0x50: // command FCC 
                     if (len >=1){
 
                         
@@ -180,14 +186,29 @@ void telemetryTaskTX(void* pvParameters) {
     }
 }
 
+// static void PID_Control(void*) {
+//     Serial.println("PID Task started!");
+//     int counter = 0;
+//     while (1) {
+//         Serial.print("[PID] Tick: ");
+//         Serial.println(counter++);
+//         vTaskDelay(pdMS_TO_TICKS(1000));  // slower to reduce USB congestion
+//     }
+// }
+
 
 
 static void PID_Control(void*) {
     
-    float setpointPitch = 0, setpointRoll = 0;
+    //float setpointPitch = 0, setpointRoll = 0;
 
-    pidPitch.setLimits(-30, 30);   // สมมติ servo คุมได้ -30 ถึง +30 องศา
-    pidRoll.setLimits(-30, 30);
+    servoRoll.attach(6);
+    servoPitch.attach(7);
+
+    pidPitch.setLimits(-90, 90);   // สมมติ servo คุมได้ -30 ถึง +30 องศา
+    pidRoll.setLimits(-90, 90);
+
+    Serial.println("PID_Control: starting PID control loop...");
 
     while (1) {
 
@@ -197,12 +218,14 @@ static void PID_Control(void*) {
         curAtt = attitude;
         xSemaphoreGive(attitudeMutex);
 
+        
+
         // Serial.print(attitude.pitch);
         // Serial.print(",");
         // Serial.print(attitude.roll);
         // Serial.println();
 
-        float dt = 1; // 1 ms = 1000Hz
+        float dt = 0.001; // 1 ms = 1000Hz
 
         // Compute errors
         float errorPitch = setpointPitch - curAtt.pitch;
@@ -222,10 +245,31 @@ static void PID_Control(void*) {
         // Serial.println();
 
         // สมมุติ Servo กลางคือ 90°
-        servoPitch.write(90 + outPitch);
-        servoRoll.write(90 + outRoll);
 
-        vTaskDelay(pdMS_TO_TICKS(1)); // 1000Hz
+        // Send PID output to servo (centered at 90)
+        float pitchCommand = constrain(90 - outPitch, 0, 180);
+        float rollCommand  = constrain(90 - outRoll,  0, 180);
+        servoPitch.write(pitchCommand);
+        servoRoll.write(rollCommand);
+        //servoPitch.write(90 + outPitch);
+        //servoRoll.write(90 + outRoll);
+
+        vTaskDelay(pdMS_TO_TICKS(10)); // 1000Hz
+
+        // // Return servos to neutral     
+        // servoPitch.write(90);
+        // servoRoll.write(90);
+
+        // // Wait for PID effect to apply, then reset to center
+        // vTaskDelay(pdMS_TO_TICKS(10));  // Apply correction briefly (10ms)
+    }
+}
+
+void taskMonitor(void*) {
+
+    while (1) {
+        Serial.println("[Monitor] I'm alive");
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
   
@@ -261,9 +305,13 @@ FLASHMEM __attribute__((noinline)) void setup() {
     }
 
     xTaskCreate(IMU_read, "IMU", 1024, nullptr, 3, nullptr);
-    xTaskCreate(PID_Control, "PID", 256, nullptr, 2, nullptr);
-    xTaskCreate(telemetryTaskTX, "TX", 1024, NULL, 1, NULL);
-    xTaskCreate(ppmControlTask, "PPM", 512, NULL, 1, NULL);
+    xTaskCreate(PID_Control, "PID", 2048, nullptr, 3, nullptr);
+    // if (xTaskCreate(PID_Control, "PID", 2048, nullptr, 2, nullptr) != pdPASS) {
+    //     Serial.println("Failed to start PID task!");
+    // }
+    //xTaskCreate(taskMonitor, "Monitor", 1024, nullptr, 1, nullptr);
+    //xTaskCreate(telemetryTaskTX, "TX", 1024, NULL, 1, NULL);
+    //xTaskCreate(ppmControlTask, "PPM", 512, NULL, 1, NULL);
     //xTaskCreate(telemetryTaskRX, "RX", 1024, NULL, 1, NULL);
 
     Serial.println("setup(): starting scheduler...");
