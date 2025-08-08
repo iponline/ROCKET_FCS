@@ -1,6 +1,7 @@
 #include <Wire.h>
 #include "IMU.h"
 #include <math.h>
+#include "Utilities.h"
 
 // Helper: multiply matrix (a: m x n, b: n x p) → out: m x p
 void matMult(double* a, double* b, double* out, int m, int n, int p) {
@@ -246,6 +247,8 @@ bool IMU::calibrate(IMUCalibration& cal, int samples, int delay_ms) {
     int32_t gx_sum = 0, gy_sum = 0, gz_sum = 0;
     RawIMUData raw;
 
+    handleLED(20,0.01,true);
+
     Serial.println("Calibrating MPU6050... (Keep still!)");
     for (int i = 0; i < samples; ++i) {
         if (readRaw(raw)) {
@@ -266,6 +269,7 @@ bool IMU::calibrate(IMUCalibration& cal, int samples, int delay_ms) {
     cal.gz_offset = gz_sum / (float)samples;
 
     setCalibration(cal);
+    handleLED(20,0.01,false);
 
     return true;
 }

@@ -67,11 +67,11 @@ static void IMU_read(void*) {
         // ---- คำนวณ Attitude (Quaternion EKF) ----
         if (imu.EKFQuaternionData(fdata, dt)) { 
             // ส่งออกค่า roll/pitch/yaw ทุก 10ms (100Hz) ที่ผ่าน LPF
-            Serial.print(millis());
-            Serial.print(",");
-            Serial.print(fdata.roll, 2);
-            Serial.print(",");
-            Serial.println(fdata.pitch, 2);
+            //Serial.print(millis());
+            //Serial.print(",");
+            //Serial.print(fdata.roll, 2);
+            //Serial.print(",");
+            //Serial.println(fdata.pitch, 2);
             //Serial.print(",");
             //Serial.println(fdata.yaw, 2);
 
@@ -310,7 +310,7 @@ FLASHMEM __attribute__((noinline)) void setup() {
     //     Serial.println("Failed to start PID task!");
     // }
     //xTaskCreate(taskMonitor, "Monitor", 1024, nullptr, 1, nullptr);
-    //xTaskCreate(telemetryTaskTX, "TX", 1024, NULL, 1, NULL);
+    xTaskCreate(telemetryTaskTX, "TX", 1024, NULL, 3, NULL);
     //xTaskCreate(ppmControlTask, "PPM", 512, NULL, 1, NULL);
     //xTaskCreate(telemetryTaskRX, "RX", 1024, NULL, 1, NULL);
 
