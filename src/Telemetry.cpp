@@ -1,7 +1,7 @@
 #include "Telemetry.h"
 
 #define TELEMETRY_SERIAL Serial1
-#define TELEMETRY_BAUD   57600
+#define TELEMETRY_BAUD   115200
 
 
 void Telemetry::init() {
@@ -9,12 +9,12 @@ void Telemetry::init() {
     TELEMETRY_SERIAL.begin(TELEMETRY_BAUD);
     delay(2000);
 
-    enterCommandMode();
+    //enterCommandMode();
 
     // 2->2400, 4->4800, 8->9600, 16->19200, 32->38400, 64->76800, 128->125000  
-    setAirDataRate(64); 
-    sendATCommand("AT&W");
-    sendATCommand("ATZ");
+    //setAirDataRate(250); 
+    //sendATCommand("AT&W");
+    //sendATCommand("ATZ");
 
 }
 
@@ -61,6 +61,7 @@ void Telemetry::sendMessage(const char* msg) {
 
 void Telemetry::sendBinary(const uint8_t* data, size_t len) {
   TELEMETRY_SERIAL.write(data, len); // Send raw binary buffer
+  //Serial.write(data, len);
 }
 
 bool Telemetry::receiveMessage(char* buffer, size_t maxLen) {

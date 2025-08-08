@@ -304,13 +304,13 @@ FLASHMEM __attribute__((noinline)) void setup() {
         while (1); // halt
     }
 
-    xTaskCreate(IMU_read, "IMU", 1024, nullptr, 3, nullptr);
-    xTaskCreate(PID_Control, "PID", 2048, nullptr, 3, nullptr);
+    xTaskCreate(IMU_read, "IMU", 1024, nullptr, 4, nullptr);
+    xTaskCreate(PID_Control, "PID", 2048, nullptr, 4, nullptr);
     // if (xTaskCreate(PID_Control, "PID", 2048, nullptr, 2, nullptr) != pdPASS) {
     //     Serial.println("Failed to start PID task!");
     // }
     //xTaskCreate(taskMonitor, "Monitor", 1024, nullptr, 1, nullptr);
-    xTaskCreate(telemetryTaskTX, "TX", 1024, NULL, 3, NULL);
+    xTaskCreate(telemetryTaskTX, "TX", 1024, NULL, 4, NULL);
     //xTaskCreate(ppmControlTask, "PPM", 512, NULL, 1, NULL);
     //xTaskCreate(telemetryTaskRX, "RX", 1024, NULL, 1, NULL);
 
