@@ -34,7 +34,7 @@ Attitude attitude;          // เก็บค่า Pitch, Roll ล่าสุ
 SemaphoreHandle_t attitudeMutex,setpointMutex;  // Mutex สำหรับป้องกันข้อมูลชนกัน
 volatile float setpointPitch = 0, setpointRoll = 0;
 
-Servo servoPitch, servoRoll;
+Servo servoPitch, servoRoll, servoThrottle;
 //ppmServoRoll, ppmServoPitch, ppmServoThrottle;
 
 const float STABILITY_BAND = 5.0;  // degrees
@@ -121,7 +121,7 @@ void telemetryTaskTX(void* pvParameters) {
 }
 
 
-  void telemetryTaskRX(void* pvParameters) {
+void telemetryTaskRX(void* pvParameters) {
 
     uint8_t type;
     uint8_t payload[256];
@@ -180,6 +180,22 @@ void telemetryTaskTX(void* pvParameters) {
                 // ... other command cases
                 default:
                     break;
+
+                case 0x30: // Throttle control
+                servoThrottle.attach(10); // Attach throttle servo to pin 5
+                if (len >= 1) { 
+                    if (payload[0] == 0x00) {
+                        servoThrottle.write(0);   // Kill throttle
+                        Serial.println("[RX] Kill throttle: servo set to 0°");
+                    } else if (payload[0] == 0x01) {
+                        servoThrottle.write(180); // Full throttle
+                        Serial.println("[RX] Full throttle: servo set to 180°");
+                    } else {
+                        //Serial.print("[RX] Unknown throttle payload: ");
+                        //Serial.println(payload[0], HEX);
+                    }
+                }
+                break;
             }
         }
         vTaskDelay(pdMS_TO_TICKS(10)); // Yield
@@ -312,7 +328,7 @@ FLASHMEM __attribute__((noinline)) void setup() {
     //xTaskCreate(taskMonitor, "Monitor", 1024, nullptr, 1, nullptr);
     xTaskCreate(telemetryTaskTX, "TX", 1024, NULL, 4, NULL);
     //xTaskCreate(ppmControlTask, "PPM", 512, NULL, 1, NULL);
-    //xTaskCreate(telemetryTaskRX, "RX", 1024, NULL, 1, NULL);
+    xTaskCreate(telemetryTaskRX, "RX", 1024, NULL, 4, NULL);
 
     Serial.println("setup(): starting scheduler...");
     Serial.flush();
