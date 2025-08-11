@@ -32,7 +32,7 @@ IMUCalibration cal;
 QueueHandle_t imuQueue;
 Attitude attitude;          // เก็บค่า Pitch, Roll ล่าสุด (ใช้แชร์ข้าม Task)
 SemaphoreHandle_t attitudeMutex,setpointMutex;  // Mutex สำหรับป้องกันข้อมูลชนกัน
-volatile float setpointPitch = 0, setpointRoll = 0;
+volatile float setpointPitch = 1.0, setpointRoll = 1.0;
 
 Servo servoPitch, servoRoll, servoThrottle;
 //ppmServoRoll, ppmServoPitch, ppmServoThrottle;
@@ -147,7 +147,41 @@ void telemetryTaskRX(void* pvParameters) {
                 }
                 break;
 
-                case 0x21: // Set setpoint
+                case 0x21: // Get current PID gains (6 floats = 24 bytes)
+                    {
+                        uint8_t txPacket[28];
+                        Serial.println("[RX] Get current PID gains");
+                        Serial.print("Pitch PID: ");
+                    
+
+                        float pitch_kp, pitch_ki, pitch_kd, roll_kp, roll_ki, roll_kd;
+                        pidPitch.getTunings(pitch_kp, pitch_ki, pitch_kd);
+                        pidRoll.getTunings(roll_kp, roll_ki, roll_kd);
+
+                        uint8_t txPayload[24];
+                        memcpy(txPayload + 0, &pitch_kp, 4);
+                        memcpy(txPayload + 4, &pitch_ki, 4);
+                        memcpy(txPayload + 8, &pitch_kd, 4);
+                        memcpy(txPayload + 12, &roll_kp, 4);
+                        memcpy(txPayload + 16, &roll_ki, 4);
+                        memcpy(txPayload + 20, &roll_kd, 4);
+
+                        Serial.println("[TX] PID gains:");
+                        Serial.print("  Pitch: Kp="); Serial.print(pitch_kp, 2);
+                        Serial.print(" Ki=");          Serial.print(pitch_ki, 2);
+                        Serial.print(" Kd=");          Serial.println(pitch_kd, 2);
+                        Serial.print("  Roll : Kp=");  Serial.print(roll_kp, 2);
+                        Serial.print(" Ki=");          Serial.print(roll_ki, 2);
+                        Serial.print(" Kd=");          Serial.println(roll_kd, 2);
+
+
+
+                        telem.buildPacket(0x21, (const uint8_t*)txPayload, 24, (const uint8_t*)txPacket); // Reuse payload for response
+                        telem.sendBinary((const uint8_t*)txPacket, 3 + 24 + 1); // header + payload + checksum
+                    }
+                    break;
+
+                case 0x22: // Set setpoint
                     if (len >= 8) {
 
                         float newPitch, newRoll;
@@ -160,6 +194,36 @@ void telemetryTaskRX(void* pvParameters) {
                         xSemaphoreGive(setpointMutex);
                     }
                     break;
+                
+                case 0x23: // Request current setpoint (roll, pitch) - 8 bytes
+
+                    if (len >= 8) {
+                        uint8_t payload[8];
+                        uint8_t packet[12];
+
+                         // Pack ค่า roll, pitch, yaw (float, 4 bytes) ลง payload
+                        memcpy(payload + 0, (const void*)&setpointPitch, 4);   // roll
+                        memcpy(payload + 4, (const void*)&setpointRoll, 4);   // pitch
+
+                        // สร้าง packet และส่งออก
+                        telem.buildPacket(0x23, (const uint8_t*)payload, 8, (uint8_t*)packet);
+                        telem.sendBinary((uint8_t*)packet, 3 + 8 + 1); // header + payload + checksum
+                        
+                    }
+                    break;
+                
+                case 0x24: // Set setpoint (roll, pitch) - 8 bytes
+                    if (len >= 8) {
+
+                        float newPitch, newRoll;
+                        memcpy(&newPitch, payload, 4);
+                        memcpy(&newRoll, payload + 4, 4);
+
+                        xSemaphoreTake(setpointMutex, portMAX_DELAY);
+                        setpointPitch = newPitch;
+                        setpointRoll = newRoll;
+                        xSemaphoreGive(setpointMutex);
+                    }
                 
                 case 0x40:   
                     if (len >= 1) {
@@ -182,19 +246,19 @@ void telemetryTaskRX(void* pvParameters) {
                     break;
 
                 case 0x30: // Throttle control
-                servoThrottle.attach(10); // Attach throttle servo to pin 5
-                if (len >= 1) { 
-                    if (payload[0] == 0x00) {
-                        servoThrottle.write(0);   // Kill throttle
-                        Serial.println("[RX] Kill throttle: servo set to 0°");
-                    } else if (payload[0] == 0x01) {
-                        servoThrottle.write(180); // Full throttle
-                        Serial.println("[RX] Full throttle: servo set to 180°");
-                    } else {
-                        //Serial.print("[RX] Unknown throttle payload: ");
-                        //Serial.println(payload[0], HEX);
+                    servoThrottle.attach(10); // Attach throttle servo to pin 5
+                    if (len >= 1) { 
+                        if (payload[0] == 0x00) {
+                            servoThrottle.write(0);   // Kill throttle
+                            Serial.println("[RX] Kill throttle: servo set to 0°");
+                        } else if (payload[0] == 0x01) {
+                            servoThrottle.write(180); // Full throttle
+                            Serial.println("[RX] Full throttle: servo set to 180°");
+                        } else {
+                            //Serial.print("[RX] Unknown throttle payload: ");
+                            //Serial.println(payload[0], HEX);
+                        }
                     }
-                }
                 break;
             }
         }
