@@ -1,6 +1,7 @@
 /**
  * @file    main.cpp
  * @brief   Rocket Flight control for Teensy boards
+ * @version beta stable 1.1
  * @author  Sasit Chuasomboon
  * @date    11.06.2025
  */
