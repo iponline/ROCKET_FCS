@@ -17,11 +17,36 @@
 #include "Arduino.h"
 #include "PPMcontrol.h"   
 #include "def.h"
+#include <EEPROM.h>
+#include "Utilities.h"
+
 
 #ifndef constrain
 #define constrain(amt, low, high) ((amt) < (low) ? (low) : ((amt) > (high) ? (high) : (amt)))
 #endif
 
+// ---------- Defaults (used if EEPROM looks invalid) ----------
+static constexpr float DEF_PKP = 0.8f;
+static constexpr float DEF_PKI = 0.1f;
+static constexpr float DEF_PKD = 0.1f;
+static constexpr float DEF_RKP = 0.8f;
+static constexpr float DEF_RKI = 0.1f;
+static constexpr float DEF_RKD = 0.1f;
+static constexpr float DEF_SETPOINT_PITCH = 0.0f;
+static constexpr float DEF_SETPOINT_ROLL  = 0.0f;
+
+// ---------- EEPROM layout (8 floats = 32 bytes) ----------
+enum {
+    EE_PKP = 0,     // Pitch Kp
+    EE_PKI = 1,     // Pitch Ki
+    EE_PKD = 2,     // Pitch Kd
+    EE_RKP = 3,     // Roll Kp
+    EE_RKI = 4,     // Roll Ki
+    EE_RKD = 5,     // Roll Kd
+    EE_SP_PITCH = 6,// Setpoint Pitch
+    EE_SP_ROLL  = 7 // Setpoint Roll
+  };
+  static inline int eeAddr(int idx) { return idx * 4; } // each float is 4 bytes
 
 
 IMU imu;
@@ -32,15 +57,114 @@ IMUCalibration cal;
 QueueHandle_t imuQueue;
 Attitude attitude;          // เก็บค่า Pitch, Roll ล่าสุด (ใช้แชร์ข้าม Task)
 SemaphoreHandle_t attitudeMutex,setpointMutex;  // Mutex สำหรับป้องกันข้อมูลชนกัน
-volatile float setpointPitch = 1.0, setpointRoll = 1.0;
+volatile float setpointPitch = 0.0, setpointRoll = 0.0;
 
 Servo servoPitch, servoRoll, servoThrottle;
 //ppmServoRoll, ppmServoPitch, ppmServoThrottle;
 
 const float STABILITY_BAND = 5.0;  // degrees
-PID pidPitch(0.8, 0.1, 0.1);
-PID pidRoll(0.8, 0.1, 0.1);
+//PID pidPitch(0.8, 0.1, 0.1);
+//PID pidRoll(0.8, 0.1, 0.1);
+PID pidPitch,pidRoll;
 
+// ---------- Helpers: validate simple ranges ----------
+static bool saneGain(float g) {
+    // keep it simple; reject NaN/Inf and absurd values
+    return isfinite(g) && fabsf(g) < 1e3f;
+}
+
+static bool saneSetpoint(float s) {
+return isfinite(s) && s >= -90.0f && s <= 90.0f;
+}
+  
+  // ---------- EEPROM I/O (simple get/put only) ----------
+static void saveParamsToEEPROM() {
+    float pkp, pki, pkd, rkp, rki, rkd;
+
+    pidPitch.getTunings(pkp, pki, pkd);
+    pidRoll.getTunings(rkp, rki, rkd);
+
+    float spPitch, spRoll;
+    // read setpoints atomically
+    xSemaphoreTake(setpointMutex, portMAX_DELAY);
+    spPitch = setpointPitch;
+    spRoll  = setpointRoll;
+    xSemaphoreGive(setpointMutex);
+
+    EEPROM.put(eeAddr(EE_PKP), pkp);
+    EEPROM.put(eeAddr(EE_PKI), pki);
+    EEPROM.put(eeAddr(EE_PKD), pkd);
+    EEPROM.put(eeAddr(EE_RKP), rkp);
+    EEPROM.put(eeAddr(EE_RKI), rki);
+    EEPROM.put(eeAddr(EE_RKD), rkd);
+    EEPROM.put(eeAddr(EE_SP_PITCH), spPitch);
+    EEPROM.put(eeAddr(EE_SP_ROLL),  spRoll);
+
+    Serial.println("[EEPROM] Saved PID gains and setpoints.");
+}
+  
+static void applyDefaultsAndPersist() {
+    pidPitch.setTunings(DEF_PKP, DEF_PKI, DEF_PKD);
+    pidRoll.setTunings(DEF_RKP, DEF_RKI, DEF_RKD);
+
+    xSemaphoreTake(setpointMutex, portMAX_DELAY);
+    setpointPitch = DEF_SETPOINT_PITCH;
+    setpointRoll  = DEF_SETPOINT_ROLL;
+    xSemaphoreGive(setpointMutex);
+
+    // also write defaults into EEPROM so next boot will read them
+    EEPROM.put(eeAddr(EE_PKP), DEF_PKP);
+    EEPROM.put(eeAddr(EE_PKI), DEF_PKI);
+    EEPROM.put(eeAddr(EE_PKD), DEF_PKD);
+    EEPROM.put(eeAddr(EE_RKP), DEF_RKP);
+    EEPROM.put(eeAddr(EE_RKI), DEF_RKI);
+    EEPROM.put(eeAddr(EE_RKD), DEF_RKD);
+    EEPROM.put(eeAddr(EE_SP_PITCH), DEF_SETPOINT_PITCH);
+    EEPROM.put(eeAddr(EE_SP_ROLL),  DEF_SETPOINT_ROLL);
+
+    Serial.println("[EEPROM] Reset to defaults and stored.");
+}
+  
+  static void loadParamsFromEEPROM() {
+    float pkp, pki, pkd, rkp, rki, rkd, spPitch, spRoll;
+  
+    EEPROM.get(eeAddr(EE_PKP), pkp);
+    EEPROM.get(eeAddr(EE_PKI), pki);
+    EEPROM.get(eeAddr(EE_PKD), pkd);
+    EEPROM.get(eeAddr(EE_RKP), rkp);
+    EEPROM.get(eeAddr(EE_RKI), rki);
+    EEPROM.get(eeAddr(EE_RKD), rkd);
+    EEPROM.get(eeAddr(EE_SP_PITCH), spPitch);
+    EEPROM.get(eeAddr(EE_SP_ROLL),  spRoll);
+  
+    bool gainsOK =
+        saneGain(pkp) && saneGain(pki) && saneGain(pkd) &&
+        saneGain(rkp) && saneGain(rki) && saneGain(rkd);
+  
+    bool spOK = saneSetpoint(spPitch) && saneSetpoint(spRoll);
+  
+    if (gainsOK) {
+      pidPitch.setTunings(pkp, pki, pkd);
+      pidRoll.setTunings(rkp, rki, rkd);
+    } else {
+      Serial.println("[EEPROM] Gains invalid. Using defaults.");
+      pidPitch.setTunings(DEF_PKP, DEF_PKI, DEF_PKD);
+      pidRoll.setTunings(DEF_RKP, DEF_RKI, DEF_RKD);
+    }
+  
+    xSemaphoreTake(setpointMutex, portMAX_DELAY);
+    if (spOK) {
+      setpointPitch = spPitch;
+      setpointRoll  = spRoll;
+    } else {
+      Serial.println("[EEPROM] Setpoints invalid. Using defaults.");
+      setpointPitch = DEF_SETPOINT_PITCH;
+      setpointRoll  = DEF_SETPOINT_ROLL;
+    }
+    xSemaphoreGive(setpointMutex);
+  
+    Serial.println("[EEPROM] Loaded params.");
+  }
 
 static void IMU_read(void*) {
 
@@ -50,6 +174,9 @@ static void IMU_read(void*) {
 
     imu.begin();  
     imu.calibrate(cal, 5000, 2); // ทำการ Calibrate IMU
+    //handleLED(20,0.01,true);
+    pinMode(20, 1); // LED pin for debugging
+    digitalWrite(20, 1); // Turn on LED initially
     imu.EKFInitQ();              // **เริ่มต้น EKF Quaternion**
 
     static uint32_t lastTick = 0;
@@ -224,6 +351,7 @@ void telemetryTaskRX(void* pvParameters) {
                         setpointRoll = newRoll;
                         xSemaphoreGive(setpointMutex);
                     }
+                    break;
                 
                 case 0x40:   
                     if (len >= 1) {
@@ -233,16 +361,6 @@ void telemetryTaskRX(void* pvParameters) {
                             //ppmControlEnabled = false;
                         }
                     }
-                    break;
-
-                case 0x50: // command FCC 
-                    if (len >=1){
-
-                        
-
-                    }
-                // ... other command cases
-                default:
                     break;
 
                 case 0x30: // Throttle control
@@ -259,7 +377,28 @@ void telemetryTaskRX(void* pvParameters) {
                             //Serial.println(payload[0], HEX);
                         }
                     }
-                break;
+                    break;
+
+                // ---------- NEW: Save to EEPROM ----------
+                case 0x50: {
+                    saveParamsToEEPROM();
+                    // (optional) ACK back with same opcode and zero-length payload
+                    uint8_t ack[4];
+                    telem.buildPacket(0x50, nullptr, 0, ack);
+                    telem.sendBinary(ack, 4);
+                } break;
+        
+                // ---------- NEW: Reset to defaults + store ----------
+                case 0x51: {
+                    applyDefaultsAndPersist();
+                    uint8_t ack[4];
+                    telem.buildPacket(0x51, nullptr, 0, ack);
+                    telem.sendBinary(ack, 4);
+                } break;
+  
+
+                
+
             }
         }
         vTaskDelay(pdMS_TO_TICKS(10)); // Yield
@@ -352,6 +491,9 @@ void taskMonitor(void*) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
+
+
+
   
 
 FLASHMEM __attribute__((noinline)) void setup() {
@@ -359,6 +501,8 @@ FLASHMEM __attribute__((noinline)) void setup() {
     delay(2000);
     Serial.begin(115200);
     telem.init();
+
+      
 
     if (CrashReport) {
         Serial.print(CrashReport);
@@ -383,6 +527,9 @@ FLASHMEM __attribute__((noinline)) void setup() {
         Serial.println("Failed to create setpointMutex!");
         while (1); // halt
     }
+
+    // ---- Load stored params; if invalid, defaults are used ----
+    loadParamsFromEEPROM();
 
     xTaskCreate(IMU_read, "IMU", 1024, nullptr, 4, nullptr);
     xTaskCreate(PID_Control, "PID", 2048, nullptr, 4, nullptr);
