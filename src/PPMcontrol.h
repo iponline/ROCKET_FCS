@@ -2,27 +2,16 @@
 #define PPM_CONTROL_H
 
 #include <Arduino.h>
-#include <PPMReader.h>
-#include <Servo.h>
 
-//void initPPMControl();
-void ppmControlTask(void*);
-
-// --- PPM and Servo Setup ---
+// Hardware mapping
 #define PPM_INPUT_PIN 8
-#define NUM_CHANNELS 6
+#define NUM_CHANNELS  6
 
-// extern volatile bool ppmControlEnabled = true;
-// extern unsigned lastRollValue = 1500;
-// extern unsigned lastPitchValue = 1500;
-// extern unsigned lastThrottleValue = 1000;
-// extern const int DEADZONE = 3;
+// Initialize PPM reader hardware (non-blocking)
+void ppmInit();
 
-class PPMControl {
-    public:
-        void initPPMControl();
-        //void ppmControlTask(void*);
-    private:
-};
+// Read latest valid values for ch1..ch3 (roll, pitch, throttle), in microseconds.
+// If no fresh frame yet, returns last known (or sane defaults: 1500/1500/1000).
+void ppmRead3(int& ch1_us, int& ch2_us, int& ch3_us);
 
 #endif // PPM_CONTROL_H
