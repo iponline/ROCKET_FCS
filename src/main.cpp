@@ -72,6 +72,30 @@
  
  // ---------- Throttle status tracking ----------
  volatile uint8_t gThrottleStatus = 0x00;          // 0x00=KILL, 0x01=FULL
+
+ // ---- New: task handles & mode state ----
+TaskHandle_t hIMU = nullptr, hPID = nullptr, hTX = nullptr, hRX = nullptr, hSTICK = nullptr;
+volatile bool controlPaused = false;          // true while IMU stream mode active
+
+// ---- New: raw IMU snapshot (updated in IMU_read) ----
+volatile float gAx = 0, gAy = 0, gAz = 0, gGx = 0, gGy = 0, gGz = 0;
+
+// Reuse attitudeMutex to also guard raw IMU snapshot updates/reads
+
+// ===== IMU Stream control (0x11 with 1-byte payload) =====
+static constexpr uint8_t PKT_IMU_CTRL   = 0x11;  // UI->FCC control
+static constexpr uint8_t IMU_CTRL_STOP  = 0x00;
+static constexpr uint8_t IMU_CTRL_START = 0x01;
+static constexpr uint8_t PKT_IMU_SAMPLE = 0x11;  // FCC->UI data packets (ax..gz)
+
+// Stream parameters/state
+static constexpr uint32_t IMU_STREAM_HZ = 100;   // stream rate in Hz
+static volatile bool gImuStreamEnabled  = false;
+
+// Forward decl
+static void startImuStreamTask();
+static TaskHandle_t imuStreamTaskHandle = nullptr;
+
  
  // ---------- Helpers ----------
  static bool saneGain(float g) {
@@ -80,7 +104,7 @@
  static bool saneSetpoint(float s) {
    return isfinite(s) && s >= -90.0f && s <= 90.0f;
  }
- 
+  
  // Kill throttle and record state
  static void forceThrottleKill() {
    if (!servoThrottle.attached()) servoThrottle.attach(10);   // throttle pin
@@ -206,9 +230,88 @@
        attitude.yaw   = fdata.yaw;
        xSemaphoreGive(attitudeMutex);
      }
+
+     // 3) Also capture one fresh raw->scaled snapshot for IMU-stream (ax..gz)
+     //    Note: IMUData() gives ax,ay,az in g, gx,gy,gz in deg/s with your current scaling
+     RawIMUData raw;
+     IMU_Data   scaled;
+     if (imu.readRaw(raw)) {
+      imu.IMUData(scaled, raw);
+      xSemaphoreTake(attitudeMutex, portMAX_DELAY);
+      gAx = scaled.ax; gAy = scaled.ay; gAz = scaled.az;  // [g]
+      gGx = scaled.gx; gGy = scaled.gy; gGz = scaled.gz;  // [deg/s]
+      xSemaphoreGive(attitudeMutex);
+     }
+
      // Tight loop; sensor rate determines throughput
    }
  }
+
+ static void ImuStreamTask(void* arg) {
+  const TickType_t period = pdMS_TO_TICKS(1000 / IMU_STREAM_HZ);
+  TickType_t lastWake = xTaskGetTickCount();
+
+  while (true) {
+    if (!gImuStreamEnabled) {
+      vTaskDelay(pdMS_TO_TICKS(50));
+      lastWake = xTaskGetTickCount();
+      continue;
+    }
+
+    // Snapshot scaled IMU (ax..gz)
+    float ax, ay, az, gx, gy, gz;
+    if (xSemaphoreTake(attitudeMutex, pdMS_TO_TICKS(2)) == pdTRUE) {
+      ax = gAx; ay = gAy; az = gAz;
+      gx = gGx; gy = gGy; gz = gGz;
+      xSemaphoreGive(attitudeMutex);
+    } else {
+      vTaskDelayUntil(&lastWake, period);
+      continue;
+    }
+
+    // Send packet: type 0x11, payload 6 floats
+    uint8_t txPayload[24];
+    memcpy(txPayload + 0,  &ax, 4);
+    memcpy(txPayload + 4,  &ay, 4);
+    memcpy(txPayload + 8,  &az, 4);
+    memcpy(txPayload + 12, &gx, 4);
+    memcpy(txPayload + 16, &gy, 4);
+    memcpy(txPayload + 20, &gz, 4);
+
+    uint8_t txPacket[3 + 24 + 1];
+    telem.buildPacket(PKT_IMU_SAMPLE, txPayload, 24, txPacket);
+    telem.sendBinary(txPacket, sizeof(txPacket));
+
+    vTaskDelayUntil(&lastWake, period);
+  }
+}
+
+static void startImuStreamTask() {
+  if (imuStreamTaskHandle == nullptr) {
+    xTaskCreate(ImuStreamTask, "ImuStream", 2048, nullptr, 2, &imuStreamTaskHandle);
+  }
+}
+
+ // ---- New: pause/resume helpers for control-side tasks ----
+static void pauseControlTasks() {
+  if (!controlPaused) {
+    if (hPID)   vTaskSuspend(hPID);
+    if (hTX)    vTaskSuspend(hTX);
+    if (hSTICK) vTaskSuspend(hSTICK);
+    controlPaused = true;
+    Serial.println("[MODE] Paused control tasks (PID, TX, STICK).");
+  }
+}
+
+static void resumeControlTasks() {
+  if (controlPaused) {
+    if (hPID)   vTaskResume(hPID);
+    if (hTX)    vTaskResume(hTX);
+    if (hSTICK) vTaskResume(hSTICK);
+    controlPaused = false;
+    Serial.println("[MODE] Resumed control tasks (PID, TX, STICK).");
+  }
+}
  
  // ---------- Telemetry TX ----------
  void telemetryTaskTX(void* pvParameters) {
@@ -347,12 +450,58 @@
            telem.sendBinary(ack, 4);
          } break;
  
-         case 0x51: { // Reset defaults + store
+        case 0x51: { // Reset defaults + store
            applyDefaultsAndPersist();
            uint8_t ack[4];
            telem.buildPacket(0x51, nullptr, 0, ack);
            telem.sendBinary(ack, 4);
-         } break;
+        } break;
+
+        case 0x11: { // IMU streaming control: payload[0] = 0x01 start, 0x00 stop (no ACK)
+          if (len >= 1) {
+            uint8_t cmd = payload[0];
+            if (cmd == IMU_CTRL_START) {
+              if (!gImuStreamEnabled) {
+                pauseControlTasks();            // throttle untouched
+                gImuStreamEnabled = true;
+                Serial.println("[RX] IMU stream: START -> control paused; streaming ax..gz.");
+              }
+            } else if (cmd == IMU_CTRL_STOP) {
+              if (gImuStreamEnabled) {
+                gImuStreamEnabled = false;
+                resumeControlTasks();
+                Serial.println("[RX] IMU stream: STOP -> control resumed.");
+              }
+            } else {
+              Serial.println("[RX] IMU stream: unknown payload (use 0x00 stop, 0x01 start).");
+            }
+          } else {
+            Serial.println("[RX] IMU stream: missing 1-byte payload.");
+          }
+        } break;
+        
+        case 0x41: { // Mode control: 0x00 resume PID, 0x01 explicit pause (optional)
+          if (len >= 1) {
+            if (payload[0] == 0x00) {
+              resumeControlTasks();
+              Serial.println("[RX] Mode: PID control (resumed).");
+            } else if (payload[0] == 0x01) {
+              pauseControlTasks();
+              Serial.println("[RX] Mode: paused (explicit).");
+            }
+          }
+        } break;
+        
+        // New: EMERGENCY THROTTLE KILL (independent, always available)
+        case 0x31: { // Safety kill (no payload)
+          forceThrottleKill(); // sets servo to 0° (or 600us if you enable that line), updates gThrottleStatus
+          uint8_t ack[4];
+          telem.buildPacket(0x31, nullptr, 0, ack);
+          telem.sendBinary(ack, 4);
+          Serial.println("[RX] EMERGENCY KILL: throttle killed.");
+        } break;
+        
+
        }
      }
      vTaskDelay(pdMS_TO_TICKS(10)); // Yield
@@ -495,19 +644,27 @@
      while (1);
    }
  
-   loadParamsFromEEPROM();
+  loadParamsFromEEPROM();
+
+  
  
-   xTaskCreate(IMU_read,        "IMU",    1024, nullptr, 4, nullptr);
-   xTaskCreate(PID_Control,     "PID",    2048, nullptr, 4, nullptr);
-   xTaskCreate(telemetryTaskTX, "TX",     1024, nullptr, 4, nullptr);
-   xTaskCreate(telemetryTaskRX, "RX",     1024, nullptr, 4, nullptr);
-   xTaskCreate(StickAssistTask, "STICK",  1024, nullptr, 4, nullptr);
+  xTaskCreate(IMU_read,        "IMU",    1024, nullptr, 4, &hIMU);
+  xTaskCreate(PID_Control,     "PID",    2048, nullptr, 4, &hPID);
+  xTaskCreate(telemetryTaskTX, "TX",     1024, nullptr, 4, &hTX);
+  xTaskCreate(telemetryTaskRX, "RX",     1024, nullptr, 4, &hRX);
+  xTaskCreate(StickAssistTask, "STICK",  1024, nullptr, 4, &hSTICK);
+  //  xTaskCreate(IMU_read,        "IMU",    1024, nullptr, 4, nullptr);
+  //  xTaskCreate(PID_Control,     "PID",    2048, nullptr, 4, nullptr);
+  //  xTaskCreate(telemetryTaskTX, "TX",     1024, nullptr, 4, nullptr);
+  //  xTaskCreate(telemetryTaskRX, "RX",     1024, nullptr, 4, nullptr);
+  //  xTaskCreate(StickAssistTask, "STICK",  1024, nullptr, 4, nullptr);
    // xTaskCreate(taskMonitor,   "Monitor", 1024, nullptr, 1, nullptr);
  
-   Serial.println("setup(): starting scheduler...");
-   Serial.flush();
+  startImuStreamTask();
+  Serial.println("setup(): starting scheduler...");
+  Serial.flush();
  
-   vTaskStartScheduler();
+  vTaskStartScheduler();
  }
  
  // ---------- Loop ----------
