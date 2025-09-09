@@ -82,6 +82,20 @@ volatile float gAx = 0, gAy = 0, gAz = 0, gGx = 0, gGy = 0, gGz = 0;
 
 // Reuse attitudeMutex to also guard raw IMU snapshot updates/reads
 
+// ===== IMU Stream control (0x11 with 1-byte payload) =====
+static constexpr uint8_t PKT_IMU_CTRL   = 0x11;  // UI->FCC control
+static constexpr uint8_t IMU_CTRL_STOP  = 0x00;
+static constexpr uint8_t IMU_CTRL_START = 0x01;
+static constexpr uint8_t PKT_IMU_SAMPLE = 0x11;  // FCC->UI data packets (ax..gz)
+
+// Stream parameters/state
+static constexpr uint32_t IMU_STREAM_HZ = 100;   // stream rate in Hz
+static volatile bool gImuStreamEnabled  = false;
+
+// Forward decl
+static void startImuStreamTask();
+static TaskHandle_t imuStreamTaskHandle = nullptr;
+
  
  // ---------- Helpers ----------
  static bool saneGain(float g) {
@@ -232,6 +246,51 @@ volatile float gAx = 0, gAy = 0, gAz = 0, gGx = 0, gGy = 0, gGz = 0;
      // Tight loop; sensor rate determines throughput
    }
  }
+
+ static void ImuStreamTask(void* arg) {
+  const TickType_t period = pdMS_TO_TICKS(1000 / IMU_STREAM_HZ);
+  TickType_t lastWake = xTaskGetTickCount();
+
+  while (true) {
+    if (!gImuStreamEnabled) {
+      vTaskDelay(pdMS_TO_TICKS(50));
+      lastWake = xTaskGetTickCount();
+      continue;
+    }
+
+    // Snapshot scaled IMU (ax..gz)
+    float ax, ay, az, gx, gy, gz;
+    if (xSemaphoreTake(attitudeMutex, pdMS_TO_TICKS(2)) == pdTRUE) {
+      ax = gAx; ay = gAy; az = gAz;
+      gx = gGx; gy = gGy; gz = gGz;
+      xSemaphoreGive(attitudeMutex);
+    } else {
+      vTaskDelayUntil(&lastWake, period);
+      continue;
+    }
+
+    // Send packet: type 0x11, payload 6 floats
+    uint8_t txPayload[24];
+    memcpy(txPayload + 0,  &ax, 4);
+    memcpy(txPayload + 4,  &ay, 4);
+    memcpy(txPayload + 8,  &az, 4);
+    memcpy(txPayload + 12, &gx, 4);
+    memcpy(txPayload + 16, &gy, 4);
+    memcpy(txPayload + 20, &gz, 4);
+
+    uint8_t txPacket[3 + 24 + 1];
+    telem.buildPacket(PKT_IMU_SAMPLE, txPayload, 24, txPacket);
+    telem.sendBinary(txPacket, sizeof(txPacket));
+
+    vTaskDelayUntil(&lastWake, period);
+  }
+}
+
+static void startImuStreamTask() {
+  if (imuStreamTaskHandle == nullptr) {
+    xTaskCreate(ImuStreamTask, "ImuStream", 2048, nullptr, 2, &imuStreamTaskHandle);
+  }
+}
 
  // ---- New: pause/resume helpers for control-side tasks ----
 static void pauseControlTasks() {
@@ -398,27 +457,27 @@ static void resumeControlTasks() {
            telem.sendBinary(ack, 4);
         } break;
 
-        case 0x10: { // IMU stream request: PAUSE control, send one (ax..gz) sample
-          pauseControlTasks();  // <-- No throttle action here
-        
-          float ax, ay, az, gx, gy, gz;
-          xSemaphoreTake(attitudeMutex, portMAX_DELAY);
-          ax = gAx; ay = gAy; az = gAz; gx = gGx; gy = gGy; gz = gGz;
-          xSemaphoreGive(attitudeMutex);
-        
-          uint8_t txPayload[24];
-          memcpy(txPayload + 0,  &ax, 4);
-          memcpy(txPayload + 4,  &ay, 4);
-          memcpy(txPayload + 8,  &az, 4);
-          memcpy(txPayload + 12, &gx, 4);
-          memcpy(txPayload + 16, &gy, 4);
-          memcpy(txPayload + 20, &gz, 4);
-        
-          uint8_t txPacket[3 + 24 + 1];
-          telem.buildPacket(0x10, txPayload, 24, txPacket);
-          telem.sendBinary(txPacket, sizeof(txPacket));
-        
-          Serial.println("[RX] IMU stream: sent ax..gz (floats); control paused; throttle untouched.");
+        case 0x11: { // IMU streaming control: payload[0] = 0x01 start, 0x00 stop (no ACK)
+          if (len >= 1) {
+            uint8_t cmd = payload[0];
+            if (cmd == IMU_CTRL_START) {
+              if (!gImuStreamEnabled) {
+                pauseControlTasks();            // throttle untouched
+                gImuStreamEnabled = true;
+                Serial.println("[RX] IMU stream: START -> control paused; streaming ax..gz.");
+              }
+            } else if (cmd == IMU_CTRL_STOP) {
+              if (gImuStreamEnabled) {
+                gImuStreamEnabled = false;
+                resumeControlTasks();
+                Serial.println("[RX] IMU stream: STOP -> control resumed.");
+              }
+            } else {
+              Serial.println("[RX] IMU stream: unknown payload (use 0x00 stop, 0x01 start).");
+            }
+          } else {
+            Serial.println("[RX] IMU stream: missing 1-byte payload.");
+          }
         } break;
         
         case 0x41: { // Mode control: 0x00 resume PID, 0x01 explicit pause (optional)
@@ -585,19 +644,27 @@ static void resumeControlTasks() {
      while (1);
    }
  
-   loadParamsFromEEPROM();
+  loadParamsFromEEPROM();
+
+  
  
-   xTaskCreate(IMU_read,        "IMU",    1024, nullptr, 4, nullptr);
-   xTaskCreate(PID_Control,     "PID",    2048, nullptr, 4, nullptr);
-   xTaskCreate(telemetryTaskTX, "TX",     1024, nullptr, 4, nullptr);
-   xTaskCreate(telemetryTaskRX, "RX",     1024, nullptr, 4, nullptr);
-   xTaskCreate(StickAssistTask, "STICK",  1024, nullptr, 4, nullptr);
+  xTaskCreate(IMU_read,        "IMU",    1024, nullptr, 4, &hIMU);
+  xTaskCreate(PID_Control,     "PID",    2048, nullptr, 4, &hPID);
+  xTaskCreate(telemetryTaskTX, "TX",     1024, nullptr, 4, &hTX);
+  xTaskCreate(telemetryTaskRX, "RX",     1024, nullptr, 4, &hRX);
+  xTaskCreate(StickAssistTask, "STICK",  1024, nullptr, 4, &hSTICK);
+  //  xTaskCreate(IMU_read,        "IMU",    1024, nullptr, 4, nullptr);
+  //  xTaskCreate(PID_Control,     "PID",    2048, nullptr, 4, nullptr);
+  //  xTaskCreate(telemetryTaskTX, "TX",     1024, nullptr, 4, nullptr);
+  //  xTaskCreate(telemetryTaskRX, "RX",     1024, nullptr, 4, nullptr);
+  //  xTaskCreate(StickAssistTask, "STICK",  1024, nullptr, 4, nullptr);
    // xTaskCreate(taskMonitor,   "Monitor", 1024, nullptr, 1, nullptr);
  
-   Serial.println("setup(): starting scheduler...");
-   Serial.flush();
+  startImuStreamTask();
+  Serial.println("setup(): starting scheduler...");
+  Serial.flush();
  
-   vTaskStartScheduler();
+  vTaskStartScheduler();
  }
  
  // ---------- Loop ----------
